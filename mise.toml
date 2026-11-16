@@ -1,0 +1,30 @@
+[tools]
+go = "latest"
+goreleaser = "latest"
+
+# Tasks intentionally avoid POSIX-only syntax: mise runs them through cmd.exe
+# on Windows and through sh elsewhere. Version stamping happens in the release
+# pipeline (goreleaser injects -X main.version={{ .Version }}); a plain local
+# build keeps the "dev" default.
+
+[tasks.build]
+description = "Build ./pear(.exe) for the host platform (version stays \"dev\")"
+run = [
+  "go build -trimpath -ldflags \"-s -w\" ./cmd/pear",
+  "go run ./cmd/pear version",
+]
+
+[tasks.check]
+description = "Vet and compile every package"
+run = [
+  "go vet ./...",
+  "go build ./...",
+]
+
+[tasks.snapshot]
+description = "Cross-build release archives into dist/ without publishing (version stamped)"
+run = "goreleaser release --snapshot --clean"
+
+[tasks."release:check"]
+description = "Validate .goreleaser.yaml without building"
+run = "goreleaser check"

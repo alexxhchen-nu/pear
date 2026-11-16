@@ -1,0 +1,20 @@
+# Build output
+/pear
+/pear.exe
+*.exe
+*.test
+*.out
+
+# Local runtime config — MAY CONTAIN LIVE OAUTH TOKENS. Never commit.
+/pear.json
+.pear/
+*.local.json
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# GoReleaser output
+/dist/
