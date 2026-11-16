@@ -6,7 +6,6 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"path/filepath"
 	"strings"
 	"text/tabwriter"
 
@@ -34,8 +33,6 @@ func main() {
 	switch args[0] {
 	case "version", "--version", "-v":
 		fmt.Printf("pear v%s (Pear AI Gateway & OAuth Router)\n", version)
-	case "import-magpie":
-		runImportMagpie()
 	case "status":
 		runStatus()
 	case "quota", "quotas":
@@ -56,7 +53,6 @@ func printHelp() {
 	fmt.Println(`Pear (v` + version + `) — Ultra-lightweight AI Router & OAuth Subscription Pool
 
 Usage:
-  pear import-magpie       Import providers, groups, and OAuth accounts from ~/.config/magpie
   pear serve [--port N]    Start the Pear Gateway HTTP/SSE server (default 127.0.0.1:3426)
   pear status              Show configured providers, OAuth accounts, and routing groups
   pear quota [--json]      Show OAuth subscription windows, remaining % and reset times
@@ -64,39 +60,12 @@ Usage:
   pear groups              List all smart routing groups and rules`)
 }
 
-func loadOrImportConfig() (*config.Config, error) {
-	cfgPath := config.DefaultConfigPath()
-	if _, err := os.Stat(cfgPath); os.IsNotExist(err) {
-		home, _ := os.UserHomeDir()
-		magpieDir := filepath.Join(home, ".config", "magpie")
-		if _, err := os.Stat(magpieDir); err == nil {
-			cfg, err := config.ImportFromMagpie(magpieDir)
-			if err == nil {
-				_ = config.Save(cfgPath, cfg)
-				return cfg, nil
-			}
-		}
-	}
-	return config.Load(cfgPath)
-}
-
-func runImportMagpie() {
-	home, _ := os.UserHomeDir()
-	magpieDir := filepath.Join(home, ".config", "magpie")
-	cfg, err := config.ImportFromMagpie(magpieDir)
-	if err != nil {
-		log.Fatalf("Failed to import from Magpie: %v", err)
-	}
-	outPath := config.DefaultConfigPath()
-	if err := config.Save(outPath, cfg); err != nil {
-		log.Fatalf("Failed to save %s: %v", outPath, err)
-	}
-	fmt.Printf("[Pear] Imported %d providers, %d OAuth accounts, %d routing groups -> %s\n",
-		len(cfg.Providers), len(cfg.Accounts), len(cfg.Groups), outPath)
+func loadConfig() (*config.Config, error) {
+	return config.Load(config.DefaultConfigPath())
 }
 
 func runStatus() {
-	cfg, err := loadOrImportConfig()
+	cfg, err := loadConfig()
 	if err != nil {
 		log.Fatalf("Error loading config: %v", err)
 	}
@@ -126,7 +95,7 @@ func runStatus() {
 }
 
 func runQuota(args []string) {
-	cfg, err := loadOrImportConfig()
+	cfg, err := loadConfig()
 	if err != nil {
 		log.Fatalf("Error loading config: %v", err)
 	}
@@ -145,7 +114,7 @@ func runQuota(args []string) {
 	fmt.Print(ui.Banner())
 	fmt.Print(ui.SectionHeader("OAuth 订阅池配额 Quota Windows"))
 	if len(snaps) == 0 {
-		fmt.Println(ui.Muted("  (no OAuth accounts configured — run `pear import-magpie`)"))
+		fmt.Println(ui.Muted("  (no OAuth accounts configured — add an oauth-* provider to ~/.pear/pear.json)"))
 		return
 	}
 	for _, s := range snaps {
@@ -178,7 +147,7 @@ func runQuota(args []string) {
 }
 
 func runProviders() {
-	cfg, err := loadOrImportConfig()
+	cfg, err := loadConfig()
 	if err != nil {
 		log.Fatalf("Error loading config: %v", err)
 	}
@@ -195,7 +164,7 @@ func runProviders() {
 }
 
 func runGroups() {
-	cfg, err := loadOrImportConfig()
+	cfg, err := loadConfig()
 	if err != nil {
 		log.Fatalf("Error loading config: %v", err)
 	}
@@ -210,7 +179,7 @@ func runGroups() {
 }
 
 func runServe(args []string) {
-	cfg, err := loadOrImportConfig()
+	cfg, err := loadConfig()
 	if err != nil {
 		log.Fatalf("Error loading config: %v", err)
 	}

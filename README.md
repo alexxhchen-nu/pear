@@ -46,7 +46,7 @@ the whole surface is `net/http` plus `crypto/tls`.
 | groups  smart_pace  ·  session_sticky  ·  order  ·  round_robin        |
 | rules  compact · subagent · image · min_tokens · time_range · folder   |
 | sticky  FNV-64a of session id  ·  60 min TTL  ·  drift only on 429/5xx |
-| quota  /v1/pear/quotas  ·  /v1/magpie/quotas drop-in                   |
+| quota  /v1/pear/quotas  ·  per-account windows  ·  reset times         |
 +------------------------------------------------------------------------+
 ```
 
@@ -106,7 +106,7 @@ see the roadmap below.
 ```
 
 ```bash
-pear import-magpie    # optional: pull providers/groups/OAuth from an old Magpie install
+pear status            # confirm what got loaded: providers, accounts, groups
 pear providers        # confirm what was loaded
 pear serve --port 3426
 ```
@@ -185,7 +185,6 @@ PEAR_CONFIG_DIR=~/pear-profiles/work pear status
 | `pear providers` | list providers and their protocol |
 | `pear groups` | list groups, strategy and members |
 | `pear quota` / `quotas` | query the live quota endpoint of a running gateway |
-| `pear import-magpie` | import providers, groups and OAuth accounts from an old Magpie install |
 | `pear version` | print the version stamped at build time |
 
 HTTP surface:
@@ -197,7 +196,6 @@ HTTP surface:
 | `POST /v1/responses` | OpenAI Responses format |
 | `GET /v1/models` | aggregated model list |
 | `GET /v1/pear/quotas` | per-account quota snapshot |
-| `GET /v1/magpie/quotas` | identical payload, kept for drop-in CLI compatibility |
 | `GET /health` | liveness |
 
 ```text

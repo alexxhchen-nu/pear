@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -53,88 +51,10 @@ func NewPool(accounts []config.AccountConfig) *Pool {
 			Windows: []QuotaWindow{},
 		}
 	}
-	p.loadMagpieQuotas()
 	return p
 }
 
-// loadMagpieQuotas seeds initial quota windows from ~/.config/magpie/quotas.json if available.
-func (p *Pool) loadMagpieQuotas() {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return
-	}
-	qPath := filepath.Join(home, ".config", "magpie", "quotas.json")
-	raw, err := os.ReadFile(qPath)
-	if err != nil {
-		return
-	}
-	// quotas.json is a flat map keyed "provider/<user|balance id>". Each value nests the real data
-	// under "quota". Windows carry `used` (a 0..100 percent for rate windows) and optionally
-	// amount/limit for credit/balance windows, plus resetsAt or resetSecs.
-	var qMap map[string]struct {
-		At    string `json:"at"`
-		Quota struct {
-			Provider string `json:"provider"`
-			Windows  []struct {
-				Name      string   `json:"name"`
-				Used      float64  `json:"used"`
-				Amount    *float64 `json:"amount"`
-				Limit     *float64 `json:"limit"`
-				Unit      string   `json:"unit"`
-				ResetsAt  string   `json:"resetsAt"`
-				ResetSecs *int64   `json:"resetSecs"`
-			} `json:"windows"`
-		} `json:"quota"`
-	}
-	if json.Unmarshal(raw, &qMap) != nil {
-		return
-	}
-
-	now := time.Now()
-	for key, entry := range qMap {
-		provKey := entry.Quota.Provider
-		if provKey == "" {
-			if slash := strings.IndexByte(key, '/'); slash > 0 {
-				provKey = key[:slash]
-			}
-		}
-		if len(entry.Quota.Windows) == 0 {
-			continue
-		}
-		st := p.matchAccount(provKey)
-		if st == nil {
-			continue
-		}
-		var wins []QuotaWindow
-		for _, w := range entry.Quota.Windows {
-			remain := 100.0 - w.Used // default: `used` is a percentage
-			if w.Limit != nil && *w.Limit > 0 && w.Amount != nil {
-				// credit/balance window: remaining fraction of the limit
-				remain = (1 - (*w.Amount / *w.Limit)) * 100.0
-			}
-			if remain < 0 {
-				remain = 0
-			} else if remain > 100 {
-				remain = 100
-			}
-			resetAt, _ := time.Parse(time.RFC3339, w.ResetsAt)
-			if resetAt.IsZero() && w.ResetSecs != nil && *w.ResetSecs > 0 {
-				resetAt = now.Add(time.Duration(*w.ResetSecs) * time.Second)
-			}
-			wins = append(wins, QuotaWindow{
-				Name:      w.Name,
-				UsedPct:   w.Used,
-				RemainPct: remain,
-				ResetsAt:  resetAt,
-			})
-		}
-		if len(wins) > 0 {
-			st.Windows = wins
-		}
-	}
-}
-
-// matchAccount finds the account whose agent matches a quotas.json provider key,
+// matchAccount finds the account whose agent matches a quota provider key,
 // tolerating the "plugin:" prefix (e.g. provider "gcp-ai" <-> agent "plugin:gcp-ai").
 func (p *Pool) matchAccount(provKey string) *AccountState {
 	if provKey == "" {

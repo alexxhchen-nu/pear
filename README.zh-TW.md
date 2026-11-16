@@ -45,7 +45,7 @@ OpenAI 與 Responses 三種封包格式，依宣告式規則或負載平衡群�
 | groups  smart_pace  ·  session_sticky  ·  order  ·  round_robin        |
 | rules  compact · subagent · image · min_tokens · time_range · folder   |
 | sticky  FNV-64a of session id  ·  60 min TTL  ·  drift only on 429/5xx |
-| quota  /v1/pear/quotas  ·  /v1/magpie/quotas drop-in                   |
+| quota  /v1/pear/quotas  ·  per-account windows  ·  reset times         |
 +------------------------------------------------------------------------+
 ```
 
@@ -102,7 +102,7 @@ mise run snapshot     # 帶版本號交叉建置到 dist/，不發布
 ```
 
 ```bash
-pear import-magpie    # 選用：從舊的 Magpie 安裝匯入 providers/groups/OAuth
+pear status            # 確認已載入的 provider、帳號與路由組
 pear providers        # 確認匯入了什麼
 pear serve --port 3426
 ```
@@ -179,7 +179,6 @@ PEAR_CONFIG_DIR=~/pear-profiles/work pear status
 | `pear providers` | 列出 provider 及其協定 |
 | `pear groups` | 列出 group、策略與成員 |
 | `pear quota` / `quotas` | 查詢執行中閘道的即時配額 |
-| `pear import-magpie` | 從舊 Magpie 安裝匯入 provider、group 與 OAuth 帳號 |
 | `pear version` | 印出建置時寫入的版本號 |
 
 HTTP 介面：
@@ -190,8 +189,7 @@ HTTP 介面：
 | `POST /v1/chat/completions` | OpenAI chat 格式 |
 | `POST /v1/responses` | OpenAI Responses 格式 |
 | `GET /v1/models` | 彙整後的模型清單 |
-| `GET /v1/pear/quotas` | 逐帳號配額快照 |
-| `GET /v1/magpie/quotas` | 同一份資料，為相容舊 CLI 保留 |
+| `GET /v1/pear/quotas` | 每帳號配額快照 |
 | `GET /health` | 存活探測 |
 
 ```text

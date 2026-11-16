@@ -51,7 +51,6 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/responses", s.handleProxy)
 	mux.HandleFunc("/v1/models", s.handleModels)
 	mux.HandleFunc("/v1/pear/quotas", s.handleQuotas)
-	mux.HandleFunc("/v1/magpie/quotas", s.handleQuotas) // Drop-in Magpie CLI compatibility
 	mux.HandleFunc("/health", s.handleHealth)
 	return mux
 }
