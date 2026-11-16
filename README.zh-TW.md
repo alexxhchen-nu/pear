@@ -16,7 +16,7 @@
 
 [![Go](https://img.shields.io/badge/go-1.24%2B-00ADD8?logo=go&logoColor=white)](https://go.dev)
 [![deps](https://img.shields.io/badge/third--party%20deps-0-3FB950)](go.mod)
-[![binary](https://img.shields.io/badge/binary-7.1%20MB-3FB950)](https://github.com/alexxhchen/pear/releases)
+[![binary](https://img.shields.io/badge/binary-7.1%20MB-3FB950)](https://github.com/alexxhchen-nu/pear/releases)
 [![license](https://img.shields.io/badge/license-MIT-3FB950)](LICENSE)
 ![platform](https://img.shields.io/badge/os-windows%20%7C%20linux%20%7C%20macos-8b949e)
 
@@ -67,7 +67,7 @@ OpenAI 與 Responses 三種封包格式，依宣告式規則或負載平衡群�
 
 **1 · 預編譯二進位檔**（Windows / Linux / macOS，amd64 與 arm64）——
 推送第一個 `v*` tag 後檔案會出現在
-[Releases](https://github.com/alexxhchen/pear/releases)。每個壓縮檔都有
+[Releases](https://github.com/alexxhchen-nu/pear/releases)。每個壓縮檔都有
 `checksums.txt` 涵蓋，執行前先校驗：
 
 ```bash
@@ -78,13 +78,13 @@ shasum -a 256 pear_darwin_arm64.tar.gz          # macOS
 **2 · `go install`**（需要 Go 1.24+；同樣依賴倉庫已打 tag）：
 
 ```bash
-go install github.com/alexxhchen/pear/cmd/pear@latest
+go install github.com/alexxhchen-nu/pear/cmd/pear@latest
 ```
 
 **3 · 用 mise 從原始碼建置**（現在就能用，不需要 tag）：
 
 ```bash
-git clone https://github.com/alexxhchen/pear.git
+git clone https://github.com/alexxhchen-nu/pear.git
 cd pear
 mise install          # 依 mise.toml 安裝 Go 工具鏈
 mise run build        # 產生 ./pear(.exe)，此時 `pear version` 顯示 dev
@@ -295,6 +295,6 @@ MIT —— 見 [LICENSE](LICENSE)。
 ```text
 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 █ P E A R   ·   single binary   ·   zero third-party deps                █
-█ source  github.com/alexxhchen/pear      license  MIT                   █
+█ source  github.com/alexxhchen-nu/pear   license  MIT                   █
 ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 ```

@@ -9,11 +9,11 @@ import (
 	"strings"
 	"text/tabwriter"
 
-	"github.com/alexxhchen/pear/internal/config"
-	"github.com/alexxhchen/pear/internal/gateway"
-	"github.com/alexxhchen/pear/internal/oauth"
-	"github.com/alexxhchen/pear/internal/router"
-	"github.com/alexxhchen/pear/internal/ui"
+	"github.com/alexxhchen-nu/pear/internal/config"
+	"github.com/alexxhchen-nu/pear/internal/gateway"
+	"github.com/alexxhchen-nu/pear/internal/oauth"
+	"github.com/alexxhchen-nu/pear/internal/router"
+	"github.com/alexxhchen-nu/pear/internal/ui"
 )
 
 // version is stamped at build time with

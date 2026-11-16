@@ -1,3 +1,3 @@
-module github.com/alexxhchen/pear
+module github.com/alexxhchen-nu/pear
 
 go 1.24

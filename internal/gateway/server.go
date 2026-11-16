@@ -12,10 +12,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/alexxhchen/pear/internal/config"
-	"github.com/alexxhchen/pear/internal/oauth"
-	"github.com/alexxhchen/pear/internal/rosetta"
-	"github.com/alexxhchen/pear/internal/router"
+	"github.com/alexxhchen-nu/pear/internal/config"
+	"github.com/alexxhchen-nu/pear/internal/oauth"
+	"github.com/alexxhchen-nu/pear/internal/rosetta"
+	"github.com/alexxhchen-nu/pear/internal/router"
 )
 
 // Server is the core Pear HTTP gateway.

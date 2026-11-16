@@ -15,7 +15,7 @@
 
 [![Go](https://img.shields.io/badge/go-1.24%2B-00ADD8?logo=go&logoColor=white)](https://go.dev)
 [![deps](https://img.shields.io/badge/third--party%20deps-0-3FB950)](go.mod)
-[![binary](https://img.shields.io/badge/binary-7.1%20MB-3FB950)](https://github.com/alexxhchen/pear/releases)
+[![binary](https://img.shields.io/badge/binary-7.1%20MB-3FB950)](https://github.com/alexxhchen-nu/pear/releases)
 [![license](https://img.shields.io/badge/license-MIT-3FB950)](LICENSE)
 ![platform](https://img.shields.io/badge/os-windows%20%7C%20linux%20%7C%20macos-8b949e)
 
@@ -71,7 +71,7 @@ Pick one. All three produce the same single executable.
 
 **1 · Prebuilt binary** (Windows / Linux / macOS, amd64 + arm64) — once the
 first `v*` tag is pushed, files appear under
-[Releases](https://github.com/alexxhchen/pear/releases). Every archive is
+[Releases](https://github.com/alexxhchen-nu/pear/releases). Every archive is
 covered by `checksums.txt`; verify before running:
 
 ```bash
@@ -82,13 +82,13 @@ shasum -a 256 pear_darwin_arm64.tar.gz          # macOS
 **2 · `go install`** (needs Go 1.24+; same caveat — the module must be tagged):
 
 ```bash
-go install github.com/alexxhchen/pear/cmd/pear@latest
+go install github.com/alexxhchen-nu/pear/cmd/pear@latest
 ```
 
 **3 · From source with mise** (works today, no tag required):
 
 ```bash
-git clone https://github.com/alexxhchen/pear.git
+git clone https://github.com/alexxhchen-nu/pear.git
 cd pear
 mise install          # Go toolchain from mise.toml
 mise run build        # -> ./pear(.exe); `pear version` reports "dev"
@@ -306,6 +306,6 @@ MIT — see [LICENSE](LICENSE).
 ```text
 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 █ P E A R   ·   single binary   ·   zero third-party deps                █
-█ source  github.com/alexxhchen/pear      license  MIT                   █
+█ source  github.com/alexxhchen-nu/pear   license  MIT                   █
 ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 ```

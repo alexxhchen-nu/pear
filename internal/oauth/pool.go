@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/alexxhchen/pear/internal/config"
+	"github.com/alexxhchen-nu/pear/internal/config"
 )
 
 // QuotaWindow tracks a single usage window (e.g. "5h" or "7d").

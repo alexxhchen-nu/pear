@@ -8,8 +8,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/alexxhchen/pear/internal/config"
-	"github.com/alexxhchen/pear/internal/oauth"
+	"github.com/alexxhchen-nu/pear/internal/config"
+	"github.com/alexxhchen-nu/pear/internal/oauth"
 )
 
 // RequestFeatures holds fast zero-copy extracted signals from an incoming LLM request.
