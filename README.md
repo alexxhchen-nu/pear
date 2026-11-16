@@ -46,9 +46,19 @@ account serves the request.
 
 ## 📦 Install
 
-Pick one path. All three end with a single executable.
+Pick one path. All four end with a single executable.
 
-**1 · From source with mise** — works today, no tag needed.
+**1 · mise, straight from GitHub Releases** — no clone, no Go toolchain.
+
+```bash
+mise use -g "github:alexxhchen-nu/pear@0.1.2"
+pear version          # pear v0.1.2
+```
+
+> mise hides releases younger than 24 hours (`minimum_release_age`). Pin
+> the version as above, or come back tomorrow for `@latest`.
+
+**2 · From source with mise** — works today, no tag needed.
 
 ```bash
 git clone https://github.com/alexxhchen-nu/pear.git
@@ -57,13 +67,13 @@ mise install          # Go toolchain from mise.toml
 mise run build        # -> ./pear (or pear.exe)
 ```
 
-**2 · `go install`** — needs Go 1.24+ and a tagged release.
+**3 · `go install`** — needs Go 1.24+ and a tagged release.
 
 ```bash
 go install github.com/alexxhchen-nu/pear/cmd/pear@latest
 ```
 
-**3 · Prebuilt archive** — grab one from
+**4 · Prebuilt archive** — grab one from
 [Releases](https://github.com/alexxhchen-nu/pear/releases) and verify it
 against `checksums.txt` first.
 

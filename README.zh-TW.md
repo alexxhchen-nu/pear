@@ -34,9 +34,18 @@ pear 是跑在你自己機器上的閘道器。把 Claude Code、Codex、Cursor�
 
 ## 📦 安裝
 
-三條路選一條，結果都是同一個可執行檔案。
+四條路選一條，結果都是同一個可執行檔案。
 
-**1 · 用 mise 從原始碼建置** —— 現在就能用，不用等 release。
+**1 · 用 mise 直接裝 GitHub Release** —— 不用 clone，不用 Go 工具鏈。
+
+```bash
+mise use -g "github:alexxhchen-nu/pear@0.1.2"
+pear version          # pear v0.1.2
+```
+
+> mise 預設隱藏發佈不足 24 小時的版本（`minimum_release_age`）。要嘛像上面一樣鎖版本，要嘛等一天再用 `@latest`。
+
+**2 · 用 mise 從原始碼建置** —— 現在就能用，不用等 release。
 
 ```bash
 git clone https://github.com/alexxhchen-nu/pear.git
@@ -45,13 +54,13 @@ mise install          # 按 mise.toml 裝 Go 工具鏈
 mise run build        # -> ./pear（Windows 上是 pear.exe）
 ```
 
-**2 · `go install`** —— 需要 Go 1.24+，以及已經打好的 tag。
+**3 · `go install`** —— 需要 Go 1.24+，以及已經打好的 tag。
 
 ```bash
 go install github.com/alexxhchen-nu/pear/cmd/pear@latest
 ```
 
-**3 · 下載預編譯包** —— 去 [Releases](https://github.com/alexxhchen-nu/pear/releases) 取一個，先用 `checksums.txt` 驗證。
+**4 · 下載預編譯包** —— 去 [Releases](https://github.com/alexxhchen-nu/pear/releases) 取一個，先用 `checksums.txt` 驗證。
 
 ```bash
 shasum -a 256 pear_darwin_arm64.tar.gz
