@@ -1,157 +1,167 @@
-<!-- readme-theme: phosphor-archive / archetype-b / rail-74 -->
+<!-- readme-theme: phosphor-archive / archetype-c / hero-svg -->
 <div align="center">
 
-```text
-                   ███████ ███████ ███████ ███████ ████
-                  ██   ██ ██      ██   ██ ██   ██ ██  █
-                  ███████ █████   ███████ ███████ █████
-                  ██      ██      ██   ██ ██   ██ ██  █
-                  ██      ███████ ██   ██ ██   ██ ██   █
-```
+<img src="assets/readme/hero.svg" alt="pear — local AI gateway" width="860">
 
-**P E A R   G A T E W A Y**
+**One binary. One config file. Every AI client on one port.**
 
 **[English](README.md)** · [简体中文](README.zh-CN.md) · [繁體中文](README.zh-TW.md)
 
 [![Go](https://img.shields.io/badge/go-1.24%2B-00ADD8?logo=go&logoColor=white)](https://go.dev)
 [![deps](https://img.shields.io/badge/third--party%20deps-0-3FB950)](go.mod)
-[![binary](https://img.shields.io/badge/binary-6.3%20MB-3FB950)](https://github.com/alexxhchen-nu/pear/releases)
 [![license](https://img.shields.io/badge/license-MIT-3FB950)](LICENSE)
-![platform](https://img.shields.io/badge/os-windows%20%7C%20linux%20%7C%20macos-8b949e)
+[![os](https://img.shields.io/badge/windows%20%C2%B7%20linux%20%C2%B7%20macos-amd64%20%C2%B7%20arm64-8b949e)](#install)
 
 </div>
 
-```text
-░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
-                        █▓▒░  ◆  OVERVIEW  ◆  ░▒▓█
-░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
-```
+## 🍐 What pear is
 
-Pear is a single-binary local AI gateway. It accepts Anthropic, OpenAI and
-Responses wire formats on one port, routes each request to a declared
-provider or a load-balanced group, and keeps OAuth subscription accounts
-alive with automatic token refresh.
+pear is a gateway that runs on your machine. Point Claude Code, Codex, Cursor,
+an SDK or a `curl` call at `127.0.0.1:3426` and pear decides which upstream
+account serves the request.
 
-It exists because desktop AI gateways grew into apps: embedded webviews,
-bundled databases, plugin VMs. Pear is the same routing capability with
-**zero third-party Go dependencies** — `go.mod` has no `require` block — so
-the whole surface is `net/http` plus `crypto/tls`.
+- **Three wire formats, one port** — Anthropic Messages, OpenAI Chat
+  Completions and OpenAI Responses all land on the same listener and are
+  translated on the way out.
+- **Many providers, one URL** — each provider in `pear.json` gets its own base
+  URL, key and protocol. Groups bundle several providers behind one model name.
+- **Subscriptions stay alive** — OAuth accounts (Codex, Copilot, Claude) are
+  refreshed in the background, so a CLI that idles overnight still works.
+- **Nothing to install** — no database, no webview, no plugin VM. One file
+  you can copy, plus `~/.pear/pear.json`.
 
-```text
-+- WHAT YOU GET ---------------------------------------------------------+
-| single config  ·  ~/.pear/pear.json  ·  atomic write  ·  mode 0600     |
-| inbound  /v1/messages  ·  /v1/responses  ·  /v1/chat/…                 |
-| upstream  openai  ·  anthropic  ·  responses  ·  any base URL          |
-| oauth pool  codex  ·  copilot  ·  claude  ·  token refresh             |
-| groups  smart_pace  ·  session_sticky  ·  order  ·  round_robin        |
-| rules  compact · subagent · image · min_tokens · time_range · folder   |
-| sticky  FNV-64a of session id  ·  60 min TTL  ·  drift only on 429/5xx |
-| quota  /v1/pear/quotas  ·  per-account windows  ·  reset times         |
-+------------------------------------------------------------------------+
-```
-
-Why it stays small:
+## ✨ Why it stays small
 
 - **One file, one truth.** Configuration is `~/.pear/pear.json` on every
-  platform. Writes go through `.tmp` + `rename`, so a crash never leaves a
-  half-written config.
-- **No lock files.** Concurrent readers never take a lock; the process reads
-  the config once at boot and re-reads on demand.
-- **No plugin VM.** OAuth refresh, routing and protocol translation are
-  ordinary Go code inside `internal/`.
+  platform. Writes go through a temp file + rename, so a crash never leaves a
+  half-written config behind.
+- **No lock files.** Readers never take a lock; the config is read at boot and
+  re-read on demand.
+- **No plugin system.** Routing, quota parsing and protocol translation are
+  ordinary Go code in `internal/`.
 - **Boring transport.** HTTP/1.1, SSE passthrough, one goroutine per request.
 
-```text
-░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
-                        █▓▒░  ◆  INSTALL  ◆  ░▒▓█
-░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
-```
+`go.mod` has no `require` block — the whole thing is `net/http`,
+`crypto/tls` and `encoding/json` from the standard library.
 
-Pick one. All three produce the same single executable.
+## 📦 Install
 
-**1 · Prebuilt binary** (Windows / Linux / macOS, amd64 + arm64) — once the
-first `v*` tag is pushed, files appear under
-[Releases](https://github.com/alexxhchen-nu/pear/releases). Every archive is
-covered by `checksums.txt`; verify before running:
+Pick one path. All three end with a single executable.
 
-```bash
-sha256sum -c checksums.txt --ignore-missing -i   # linux
-shasum -a 256 pear_darwin_arm64.tar.gz          # macOS
-```
-
-**2 · `go install`** (needs Go 1.24+; same caveat — the module must be tagged):
-
-```bash
-go install github.com/alexxhchen-nu/pear/cmd/pear@latest
-```
-
-**3 · From source with mise** (works today, no tag required):
+**1 · From source with mise** — works today, no tag needed.
 
 ```bash
 git clone https://github.com/alexxhchen-nu/pear.git
 cd pear
 mise install          # Go toolchain from mise.toml
-mise run build        # -> ./pear(.exe); `pear version` reports "dev"
-mise run release:check   # goreleaser config is valid
-mise run snapshot     # stamped cross-build into dist/, nothing published
+mise run build        # -> ./pear (or pear.exe)
 ```
 
-Package managers (scoop, Homebrew, AUR, winget) are **not published yet** —
-see the roadmap below.
-
-```text
-░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
-                      █▓▒░  ◆  QUICK START  ◆  ░▒▓█
-░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
-```
+**2 · `go install`** — needs Go 1.24+ and a tagged release.
 
 ```bash
-pear status            # confirm what got loaded: providers, accounts, groups
-pear providers        # confirm what was loaded
-pear serve --port 3426
+go install github.com/alexxhchen-nu/pear/cmd/pear@latest
 ```
 
-Then point clients at the gateway — either the Anthropic-native or the
-OpenAI-native base URL:
+**3 · Prebuilt archive** — grab one from
+[Releases](https://github.com/alexxhchen-nu/pear/releases) and verify it
+against `checksums.txt` first.
+
+```bash
+shasum -a 256 pear_darwin_arm64.tar.gz
+```
+
+> Package managers (`scoop`, Homebrew, winget, AUR) are not published yet.
+> They are listed on the roadmap below, not faked here.
+
+## ⚡ Start it in 30 seconds
+
+```bash
+pear status          # what got loaded: providers, accounts, groups
+pear serve           # foreground gateway on 127.0.0.1:3426
+```
+
+Point a client at it — pear speaks both native base URLs:
 
 ```bash
 export ANTHROPIC_BASE_URL=http://127.0.0.1:3426
 export OPENAI_BASE_URL=http://127.0.0.1:3426/v1
 ```
 
-Sanity checks:
+Then confirm it is alive:
 
 ```bash
 curl -s http://127.0.0.1:3426/health
-curl -s http://127.0.0.1:3426/v1/models | head
+curl -s http://127.0.0.1:3426/v1/models
 ```
+
+`pear groups` shows how each group will pick an upstream.
+
+## 🔀 How a request is routed
+
+Two decisions per request. That is the whole system.
 
 ```text
-░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
-                     █▓▒░  ◆  CONFIG SCHEMA  ◆  ░▒▓█
-░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
+inbound  /v1/messages · /v1/responses
+   │
+   ▼
+sniff    model · tokens · image · folder
+   │
+   ▼
+GATE 1   rule matched?
+   │        yes -> that rule's target list
+   │        no  -> the group strategy
+   ▼
+GATE 2   candidate healthy?
+   │        yes -> forward, stream SSE back
+   │        429/5xx -> next candidate
+   ▼
+sticky   FNV-64a(session) for 60 min
 ```
 
-`~/.pear/pear.json` — the entire configuration, four top-level keys.
+- **GATE 1 — routing.** A rule matches on request *shape*: token count, image
+  presence, time window, folder, or a compaction / sub-agent call. First match
+  wins, otherwise the group strategy runs: `smart_pace`, `session_sticky`,
+  `order` or `round_robin`.
+- **GATE 2 — health.** Candidates are tried in order until one accepts the
+  request. A `429` or `5xx` moves to the next candidate; the failed one is
+  skipped for the rest of the window.
+- **Sticky sessions.** A session id hashes onto a preferred member, so
+  consecutive turns of one conversation hit the same upstream account and keep
+  its prompt cache warm.
+- **Sanitising.** When an Anthropic request fails over to a non-Anthropic
+  upstream, `thinking.signature` and `cache_control` are stripped — upstreams
+  otherwise reject the body with `400`.
 
-| Key | Type | Meaning |
-| :-- | :-- | :-- |
-| `server.listen` | string | bind address, default `127.0.0.1:3426` |
-| `server.default_target` | string | fallback route when no rule matches |
-| `server.compact_target` | string | route used when the request is a compaction call |
-| `server.subagent_target` | string | route used for sub-agent traffic |
-| `server.ttft_timeout_ms` | int | time-to-first-token budget before failover |
-| `server.sticky_ttl_min` | int | session stickiness window, default 60 |
-| `providers[]` | array | `id`, `name`, `protocol`, `base_url`, `api_key`, optional `models`, `off` |
-| `accounts[]` | array | OAuth subscriptions: `agent`, `user`, `access_token`, `refresh_token`, `expires_at` |
-| `groups[]` | array | `id`, `strategy`, `members`, optional `classifier`, `rules` |
+## ⚙️ Configure it
 
-`providers[].protocol` accepts `openai`, `anthropic`, `responses`,
-`oauth-codex`, `oauth-copilot`, `oauth-claude`.
-`groups[].strategy` accepts `smart_pace`, `session_sticky`, `order`,
-`round_robin`.
+Everything lives in `~/.pear/pear.json`, four top-level keys.
 
-A rule matches on request shape, not on the prompt text:
+```json
+{
+  "server": {
+    "listen": "127.0.0.1:3426",
+    "default_target": "my-group",
+    "sticky_ttl_min": 60
+  },
+  "providers": [ ... ],
+  "accounts": [ ... ],
+  "groups": [ ... ]
+}
+```
+
+- **`server`** — `listen`, `default_target`, `compact_target`,
+  `subagent_target`, `ttft_timeout_ms`, `sticky_ttl_min`.
+- **`providers[]`** — `id`, `name`, `protocol`, `base_url`, `api_key`, optional
+  `models` and `off`. Protocols: `openai`, `anthropic`, `responses`,
+  `oauth-codex`, `oauth-copilot`, `oauth-claude`.
+- **`accounts[]`** — OAuth subscriptions: `agent`, `user`, `access_token`,
+  `refresh_token`, `expires_at`. pear rotates them for you.
+- **`groups[]`** — `id`, `strategy`, `members`, optional `classifier` and
+  `rules`. Members are `provider/model`, another group, or a bare model name
+  that any provider may serve.
+
+A rule describes the request, never the prompt text:
 
 ```json
 {
@@ -164,148 +174,48 @@ A rule matches on request shape, not on the prompt text:
 }
 ```
 
-`PEAR_CONFIG_DIR` overrides the config directory (handy for tests and for
-keeping several profiles side by side):
+Keep several profiles side by side by pointing at another directory:
 
 ```bash
 PEAR_CONFIG_DIR=~/pear-profiles/work pear status
 ```
 
-```text
-░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
-                          █▓▒░  ◆  CLI  ◆  ░▒▓█
-░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
-```
+## 🧪 CLI
 
-| Command | What it does |
-| :-- | :-- |
-| `pear serve [--port N]` | run the gateway in the foreground |
-| `pear daemon` | same as `serve` |
-| `pear status` | config path, provider/group counts, listen address |
-| `pear providers` | list providers and their protocol |
-| `pear groups` | list groups, strategy and members |
-| `pear quota` / `quotas` | query the live quota endpoint of a running gateway |
-| `pear version` | print the version stamped at build time |
+- `pear serve [--port N]` — run the gateway in the foreground.
+- `pear daemon` — same thing, under the name your init system expects.
+- `pear status` — config path, counts, listen address.
+- `pear providers` — providers and their protocol.
+- `pear groups` — groups, strategy, members.
+- `pear quota` — quota snapshot from a running gateway.
+- `pear version` — build stamp (`dev` for local builds).
 
-HTTP surface:
+## 🌐 HTTP surface
 
-| Path | Purpose |
-| :-- | :-- |
-| `POST /v1/messages` | Anthropic messages format |
-| `POST /v1/chat/completions` | OpenAI chat format |
-| `POST /v1/responses` | OpenAI Responses format |
-| `GET /v1/models` | aggregated model list |
-| `GET /v1/pear/quotas` | per-account quota snapshot |
-| `GET /health` | liveness |
+- `POST /v1/messages` — Anthropic Messages.
+- `POST /v1/chat/completions` — OpenAI Chat Completions.
+- `POST /v1/responses` — OpenAI Responses.
+- `GET /v1/models` — aggregated model list.
+- `GET /v1/pear/quotas` — per-account quota snapshot.
+- `GET /health` — liveness.
 
-```text
-░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
-                     █▓▒░  ◆  ROUTING LOGIC  ◆  ░▒▓█
-░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
-```
+## 🗺️ Roadmap
 
-Two decisions per request, nothing else:
+- ✅ Single binary, three protocols, four strategies.
+- ✅ OAuth refresh, session stickiness, rosetta sanitiser.
+- ✅ Quota endpoint and `pear quota`.
+- 🔜 First tagged release with checksums.
+- 🔜 `scoop` · Homebrew · winget · AUR manifests.
+- 🔜 Config profiles in the CLI.
+- 🧪 Usage accounting and local telemetry.
 
-```text
-              +--------------------------------------------+
-              | inbound request  ·  :3426                  |
-              | /v1/messages · /v1/responses               |
-              +----------------------+---------------------+
-                                     |
-                                     ▼
-              +--------------------------------------------+
-              | sniff: model · tokens · image · folder     |
-              | flags: compact · subagent · time window    |
-              +----------------------+---------------------+
-                                     |
-                                     ▼
-              +--------------------------------------------+
-              | ▓ GATE 1  route rule matched?              |
-              +-----+---------------------------------+----+
-                yes |                                 | no
-                    ▼                                 ▼
-      +---------------------------+     +---------------------------+
-      | rule target list          |     | group strategy            |
-      | (ordered, may nest)       |     | smart_pace · sticky · rr  |
-      +---------------------------+     +---------------------------+
-                    |                                 |
-                    +----------------+----------------+
-                                     ▼
-              +--------------------------------------------+
-              | ▓ GATE 2  candidate usable?  (429 / 5xx)   |
-              +-----+---------------------------------+----+
-                yes |                                 | no
-                    ▼                                 ▼
-      +---------------------------+     +---------------------------+
-      | rosetta sanitize + SSE    |     | next candidate in list    |
-      | record sticky hash 60m    |     | retry until empty         |
-      +---------------------------+     +---------------------------+
-```
+## 🤝 Contributing
 
-`GATE 1` picks the target list from the matched rule or the group strategy.
-`GATE 2` walks candidates in order until one accepts the request. A session
-id hashes (FNV-64a) onto a preferred member, so consecutive turns of one
-conversation stay on the same upstream account — which keeps the upstream
-prompt cache warm. The hash only changes when the candidate answers 429 or
-5xx, and the new choice is recorded for the rest of the TTL.
+Open an issue with the request shape and the providers involved. A bug report
+that includes `pear status` and the failing `/v1/models` output is actionable
+in one pass. Pull requests: keep `mise run check` green (vet + build) and
+explain the routing case you touched.
 
-Before forwarding, `internal/rosetta` normalises the body: when a request
-originating from Anthropic fails over to a non-Anthropic provider,
-`thinking.signature` and `cache_control` are stripped, because upstreams
-reject them with `400`.
+## 📄 License
 
-```text
-░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
-                    █▓▒░  ◆  QUOTAS & STATUS  ◆  ░▒▓█
-░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
-```
-
-```text
-▰▰ [1] BOOT  ·  load config  ·  validate providers  ·  bind 127.0.0.1:3426
-   │
-▰▰ [2] SERVE  ·  route  ·  upstream  ·  SSE passthrough  ·  sticky record
-   │
-▰▰ [3] DRIFT  ·  429 / 5xx  ·  drop candidate  ·  rehash  ·  retry bounded
-   │
-▰▰ [4] REFRESH  ·  oauth expiry  ·  rotate token  ·  persist
-```
-
-Quota data comes from two places: whatever the provider returns in
-rate-limit headers, and the OAuth token state Pear tracks itself. Both are
-exposed read-only — Pear never spends a subscription silently.
-
-```text
-░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
-                   █▓▒░  ◆  ROADMAP & SUPPORT  ◆  ░▒▓█
-░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
-```
-
-| Area | State |
-| :-- | :-- |
-| Single binary, all three protocols | done |
-| OAuth refresh (codex, copilot, claude) | done |
-| Session stickiness + rosetta sanitizer | done |
-| Quota endpoint | done |
-| First tagged release + checksums | next |
-| `scoop` / Homebrew / winget manifests | planned |
-| Per-user config profiles in the CLI | planned |
-| Usage accounting / local telemetry | under evaluation |
-
-Contributions: open an issue with the request shape and the providers
-involved. Bug reports that include `pear status` and the failing
-`/v1/models` output are actionable in one pass.
-
-```text
-░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
-                        █▓▒░  ◆  LICENSE  ◆  ░▒▓█
-░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
-```
-
-MIT — see [LICENSE](LICENSE).
-
-```text
-▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-█ P E A R   ·   single binary   ·   zero third-party deps                █
-█ source  github.com/alexxhchen-nu/pear   license  MIT                   █
-▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-```
+[MIT](LICENSE) © 2026 alexxhchen

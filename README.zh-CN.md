@@ -1,152 +1,137 @@
-<!-- readme-theme: phosphor-archive / archetype-b / rail-74 -->
-
+<!-- readme-theme: phosphor-archive / archetype-c / hero-svg -->
 <div align="center">
 
-```text
-                   ███████ ███████ ███████ ███████ ████
-                  ██   ██ ██      ██   ██ ██   ██ ██  █
-                  ███████ █████   ███████ ███████ █████
-                  ██      ██      ██   ██ ██   ██ ██  █
-                  ██      ███████ ██   ██ ██   ██ ██   █
-```
+<img src="assets/readme/hero.svg" alt="pear — 本地 AI 网关" width="860">
 
-**P E A R   G A T E W A Y**
+**一个二进制文件。一份配置。所有 AI 客户端共用一个端口。**
 
 [English](README.md) · **[简体中文](README.zh-CN.md)** · [繁體中文](README.zh-TW.md)
 
 [![Go](https://img.shields.io/badge/go-1.24%2B-00ADD8?logo=go&logoColor=white)](https://go.dev)
 [![deps](https://img.shields.io/badge/third--party%20deps-0-3FB950)](go.mod)
-[![binary](https://img.shields.io/badge/binary-6.3%20MB-3FB950)](https://github.com/alexxhchen-nu/pear/releases)
 [![license](https://img.shields.io/badge/license-MIT-3FB950)](LICENSE)
-![platform](https://img.shields.io/badge/os-windows%20%7C%20linux%20%7C%20macos-8b949e)
+[![os](https://img.shields.io/badge/windows%20%C2%B7%20linux%20%C2%B7%20macos-amd64%20%C2%B7%20arm64-8b949e)](#安装)
 
 </div>
 
-```text
-░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
-                        █▓▒░  ◆  OVERVIEW  ◆  ░▒▓█
-░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
-```
+## 🍐 pear 是什么
 
-Pear 是一个单文件的本地 AI 网关。它在一个端口上同时接受 Anthropic、
-OpenAI 与 Responses 三种报文格式，按声明式规则或负载均衡组把请求转发到
-上游，并用自动续期让 OAuth 订阅账号保持可用。
+pear 是跑在你自己机器上的网关。把 Claude Code、Codex、Cursor、各种 SDK 或者一句 `curl` 指向 `127.0.0.1:3426`，剩下的事交给 pear：这次请求由哪个上游账号来服务。
 
-它存在的原因是：桌面版 AI 网关长成了"应用"——内嵌 WebView、打包数据库、
-插件虚拟机。Pear 保留同样的路由能力，但**没有任何第三方 Go 依赖**：
-`go.mod` 里没有 `require` 块，整个实现就是 `net/http` 加 `crypto/tls`。
+- **三种协议，一个端口** —— Anthropic Messages、OpenAI Chat Completions、OpenAI Responses 都落在同一个监听上，出口时自动转换。
+- **多个供应商，一个地址** —— `pear.json` 里每个 provider 有自己的 base URL、密钥和协议。group 把几个 provider 打包成一个模型名对外。
+- **订阅不会睡着** —— Codex、Copilot、Claude 这些 OAuth 账号在后台自动刷新，挂了一夜的 CLI 第二天照样能用。
+- **不用装任何东西** —— 没有数据库、没有内嵌浏览器、没有插件虚拟机。一个可以直接拷贝的可执行文件，加一份 `~/.pear/pear.json`。
 
-```text
-+- WHAT YOU GET ---------------------------------------------------------+
-| single config  ·  ~/.pear/pear.json  ·  atomic write  ·  mode 0600     |
-| inbound  /v1/messages  ·  /v1/responses  ·  /v1/chat/…                 |
-| upstream  openai  ·  anthropic  ·  responses  ·  any base URL          |
-| oauth pool  codex  ·  copilot  ·  claude  ·  token refresh             |
-| groups  smart_pace  ·  session_sticky  ·  order  ·  round_robin        |
-| rules  compact · subagent · image · min_tokens · time_range · folder   |
-| sticky  FNV-64a of session id  ·  60 min TTL  ·  drift only on 429/5xx |
-| quota  /v1/pear/quotas  ·  per-account windows  ·  reset times         |
-+------------------------------------------------------------------------+
-```
+## ✨ 为什么它这么小
 
-为什么它一直保持这个体积：
+- **一个文件就是全部真相。** 所有平台都用 `~/.pear/pear.json`。写入走临时文件加 rename，崩溃也不会留下写坏的配置。
+- **没有锁文件。** 读配置从不加锁：启动时读一次，之后按需重读。
+- **没有插件系统。** 路由、配额解析、协议转换都是 `internal/` 里的普通 Go 代码。
+- **传输层保持无聊。** HTTP/1.1、SSE 透传、每个请求一个 goroutine。
 
-- **一个文件即全部事实。** 所有平台都用 `~/.pear/pear.json`。写入走
-  `.tmp` + `rename`，进程崩了也不会留下写了一半的配置。
-- **没有锁文件。** 并发读取不需要加锁；进程启动时读一次，需要时重读。
-- **没有插件虚拟机。** OAuth 续期、路由、协议转换都是 `internal/` 里的普通 Go 代码。
-- **传输层保持无聊。** HTTP/1.1、SSE 直通、每请求一个 goroutine。
+`go.mod` 里没有 `require` 块 —— 整个项目只用了标准库的 `net/http`、`crypto/tls` 和 `encoding/json`。
 
-```text
-░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
-                        █▓▒░  ◆  INSTALL  ◆  ░▒▓█
-░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
-```
+## 📦 安装
 
-三种方式产出的都是同一个可执行文件，任选其一。
+三条路选一条，结果都是同一个可执行文件。
 
-**1 · 预编译二进制**（Windows / Linux / macOS，amd64 与 arm64）——
-推送第一个 `v*` tag 后文件会出现在
-[Releases](https://github.com/alexxhchen-nu/pear/releases)。每个压缩包都由
-`checksums.txt` 覆盖，运行前先校验：
-
-```bash
-sha256sum -c checksums.txt --ignore-missing -i   # Linux
-shasum -a 256 pear_darwin_arm64.tar.gz          # macOS
-```
-
-**2 · `go install`**（需要 Go 1.24+；同样依赖仓库已打 tag）：
-
-```bash
-go install github.com/alexxhchen-nu/pear/cmd/pear@latest
-```
-
-**3 · 用 mise 从源码构建**（现在就能用，不需要 tag）：
+**1 · 用 mise 从源码构建** —— 现在就能用，不用等 release。
 
 ```bash
 git clone https://github.com/alexxhchen-nu/pear.git
 cd pear
 mise install          # 按 mise.toml 装 Go 工具链
-mise run build        # 生成 ./pear(.exe)，此时 `pear version` 显示 dev
-mise run release:check   # 校验 goreleaser 配置
-mise run snapshot     # 带版本号交叉构建到 dist/，不发布
+mise run build        # -> ./pear（Windows 上是 pear.exe）
 ```
 
-包管理器（scoop、Homebrew、AUR、winget）**目前尚未发布**，
-见下方路线图。
-
-```text
-░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
-                      █▓▒░  ◆  QUICK START  ◆  ░▒▓█
-░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
-```
+**2 · `go install`** —— 需要 Go 1.24+，以及已经打好的 tag。
 
 ```bash
-pear status            # 确认已加载的 provider、账号与路由组
-pear providers        # 确认导入了什么
-pear serve --port 3426
+go install github.com/alexxhchen-nu/pear/cmd/pear@latest
 ```
 
-然后让客户端指向网关，用 Anthropic 原生或 OpenAI 原生任一 base URL：
+**3 · 下载预编译包** —— 去 [Releases](https://github.com/alexxhchen-nu/pear/releases) 取一个，先用 `checksums.txt` 校验。
+
+```bash
+shasum -a 256 pear_darwin_arm64.tar.gz
+```
+
+> 包管理器（`scoop`、Homebrew、winget、AUR）还没发布。它们在下面的路线图里，这里不写假装能用的命令。
+
+## ⚡ 30 秒跑起来
+
+```bash
+pear status          # 看加载了什么：providers、accounts、groups
+pear serve           # 前台启动，监听 127.0.0.1:3426
+```
+
+把客户端指过来 —— pear 同时提供两种原生 base URL：
 
 ```bash
 export ANTHROPIC_BASE_URL=http://127.0.0.1:3426
 export OPENAI_BASE_URL=http://127.0.0.1:3426/v1
 ```
 
-自检：
+确认它活着：
 
 ```bash
 curl -s http://127.0.0.1:3426/health
-curl -s http://127.0.0.1:3426/v1/models | head
+curl -s http://127.0.0.1:3426/v1/models
 ```
+
+`pear groups` 可以看清每个 group 会怎么挑上游。
+
+## 🔀 请求是怎么被路由的
+
+每个请求只做两个决定，整个系统就这些。
 
 ```text
-░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
-                     █▓▒░  ◆  CONFIG SCHEMA  ◆  ░▒▓█
-░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
+in     /v1/messages · /v1/responses
+  │
+  ▼
+sniff  model · tokens · image · folder
+  │
+  ▼
+GATE 1 rule matched?
+  │      yes -> that rule's target list
+  │      no  -> the group strategy
+  ▼
+GATE 2 candidate healthy?
+  │      yes -> forward, stream SSE back
+  │      429/5xx -> next candidate
+  ▼
+sticky FNV-64a(session), 60 min
 ```
 
-`~/.pear/pear.json` —— 全部配置，四个顶层键。
+- **关卡 1 —— 路由。** 规则只看请求的形状：token 数、有没有图片、时间段、目录，或者是不是压缩/子代理调用。先命中先赢，都不命中就走 group 策略：`smart_pace`、`session_sticky`、`order`、`round_robin`。
+- **关卡 2 —— 健康。** 候选按顺序试，直到有一个接单。遇到 `429` 或 `5xx` 就换下一个，失败的候选在窗口期内跳过。
+- **粘性会话。** 会话 id 会哈希到某个固定成员，同一段对话的连续几轮落在同一个上游账号上，提示词缓存一直是热的。
+- **请求清洗。** Anthropic 请求切到非 Anthropic 上游时，`thinking.signature` 和 `cache_control` 会被剥掉 —— 否则上游直接 `400`。
 
-| 键 | 类型 | 含义 |
-| :-- | :-- | :-- |
-| `server.listen` | string | 监听地址，默认 `127.0.0.1:3426` |
-| `server.default_target` | string | 没有规则命中时的兜底路由 |
-| `server.compact_target` | string | 压缩（compact）调用的路由 |
-| `server.subagent_target` | string | 子代理流量的路由 |
-| `server.ttft_timeout_ms` | int | 首 token 超时预算，超过即切换 |
-| `server.sticky_ttl_min` | int | 会话粘性窗口，默认 60 分钟 |
-| `providers[]` | array | `id`、`name`、`protocol`、`base_url`、`api_key`，可选 `models`、`off` |
-| `accounts[]` | array | OAuth 订阅：`agent`、`user`、`access_token`、`refresh_token`、`expires_at` |
-| `groups[]` | array | `id`、`strategy`、`members`，可选 `classifier`、`rules` |
+## ⚙️ 配置
 
-`providers[].protocol` 取值：`openai`、`anthropic`、`responses`、
-`oauth-codex`、`oauth-copilot`、`oauth-claude`。
-`groups[].strategy` 取值：`smart_pace`、`session_sticky`、`order`、
-`round_robin`。
+全部内容都在 `~/.pear/pear.json`，顶层只有四个键。
 
-规则只看请求形态，不看提示词内容：
+```json
+{
+  "server": {
+    "listen": "127.0.0.1:3426",
+    "default_target": "my-group",
+    "sticky_ttl_min": 60
+  },
+  "providers": [ ... ],
+  "accounts": [ ... ],
+  "groups": [ ... ]
+}
+```
+
+- **`server`** —— `listen`、`default_target`、`compact_target`、`subagent_target`、`ttft_timeout_ms`、`sticky_ttl_min`。
+- **`providers[]`** —— `id`、`name`、`protocol`、`base_url`、`api_key`，可选 `models` 和 `off`。协议可选 `openai`、`anthropic`、`responses`、`oauth-codex`、`oauth-copilot`、`oauth-claude`。
+- **`accounts[]`** —— OAuth 订阅：`agent`、`user`、`access_token`、`refresh_token`、`expires_at`，pear 负责轮换。
+- **`groups[]`** —— `id`、`strategy`、`members`，可选 `classifier` 和 `rules`。成员写成 `provider/model`、另一个 group，或者任一家都能提供的裸模型名。
+
+规则描述的是请求本身，而不是提示词内容：
 
 ```json
 {
@@ -159,142 +144,45 @@ curl -s http://127.0.0.1:3426/v1/models | head
 }
 ```
 
-`PEAR_CONFIG_DIR` 可以覆盖配置目录（方便测试，也方便并排放多套配置）：
+想同时保留几套配置，就把目录指到别处：
 
 ```bash
 PEAR_CONFIG_DIR=~/pear-profiles/work pear status
 ```
 
-```text
-░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
-                          █▓▒░  ◆  CLI  ◆  ░▒▓█
-░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
-```
+## 🧪 命令行
 
-| 命令 | 作用 |
-| :-- | :-- |
-| `pear serve [--port N]` | 前台运行网关 |
-| `pear daemon` | 等同 `serve` |
-| `pear status` | 配置路径、provider/group 数量、监听地址 |
-| `pear providers` | 列出 provider 及其协议 |
-| `pear groups` | 列出 group、策略与成员 |
-| `pear quota` / `quotas` | 查询运行中网关的实时配额 |
-| `pear version` | 打印构建时写入的版本号 |
+- `pear serve [--port N]` —— 前台运行网关。
+- `pear daemon` —— 同一件事，换成 init 系统习惯的名字。
+- `pear status` —— 配置路径、数量统计、监听地址。
+- `pear providers` —— provider 列表和各自协议。
+- `pear groups` —— group、策略、成员。
+- `pear quota` —— 从运行中的网关取配额快照。
+- `pear version` —— 构建时写入的版本（本地构建是 `dev`）。
 
-HTTP 接口：
+## 🌐 HTTP 接口
 
-| 路径 | 用途 |
-| :-- | :-- |
-| `POST /v1/messages` | Anthropic messages 格式 |
-| `POST /v1/chat/completions` | OpenAI chat 格式 |
-| `POST /v1/responses` | OpenAI Responses 格式 |
-| `GET /v1/models` | 汇总后的模型列表 |
-| `GET /v1/pear/quotas` | 每账号配额快照 |
-| `GET /health` | 存活探针 |
+- `POST /v1/messages` —— Anthropic Messages 格式。
+- `POST /v1/chat/completions` —— OpenAI Chat Completions 格式。
+- `POST /v1/responses` —— OpenAI Responses 格式。
+- `GET /v1/models` —— 聚合后的模型列表。
+- `GET /v1/pear/quotas` —— 逐账号配额快照。
+- `GET /health` —— 存活检查。
 
-```text
-░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
-                     █▓▒░  ◆  ROUTING LOGIC  ◆  ░▒▓█
-░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
-```
+## 🗺️ 路线图
 
-每个请求只有两次决策：
+- ✅ 单文件二进制、三种协议、四种策略。
+- ✅ OAuth 刷新、会话粘性、rosetta 请求清洗。
+- ✅ 配额接口和 `pear quota`。
+- 🔜 第一个带校验和的正式 release。
+- 🔜 `scoop` · Homebrew · winget · AUR 清单。
+- 🔜 命令行里的多套配置。
+- 🧪 用量统计与本地遥测。
 
-```text
-              +--------------------------------------------+
-              | inbound request  ·  :3426                  |
-              | /v1/messages · /v1/responses               |
-              +----------------------+---------------------+
-                                     |
-                                     ▼
-              +--------------------------------------------+
-              | sniff: model · tokens · image · folder     |
-              | flags: compact · subagent · time window    |
-              +----------------------+---------------------+
-                                     |
-                                     ▼
-              +--------------------------------------------+
-              | ▓ GATE 1  route rule matched?              |
-              +-----+---------------------------------+----+
-                yes |                                 | no
-                    ▼                                 ▼
-      +---------------------------+     +---------------------------+
-      | rule target list          |     | group strategy            |
-      | (ordered, may nest)       |     | smart_pace · sticky · rr  |
-      +---------------------------+     +---------------------------+
-                    |                                 |
-                    +----------------+----------------+
-                                     ▼
-              +--------------------------------------------+
-              | ▓ GATE 2  candidate usable?  (429 / 5xx)   |
-              +-----+---------------------------------+----+
-                yes |                                 | no
-                    ▼                                 ▼
-      +---------------------------+     +---------------------------+
-      | rosetta sanitize + SSE    |     | next candidate in list    |
-      | record sticky hash 60m    |     | retry until empty         |
-      +---------------------------+     +---------------------------+
-```
+## 🤝 参与
 
-`GATE 1` 用命中的规则或组策略决定目标列表；`GATE 2` 按顺序尝试候选，
-直到某个上游接受请求。会话 id 经 FNV-64a 哈希映射到首选成员，因此同一段
-对话的连续轮次会落在同一个上游账号上——上游的 prompt cache 因此保持命中。
-只有当候选返回 429 或 5xx 时哈希才会漂移，并且新选择会在 TTL 内固定。
+有请求形状或供应商相关的问题就开 issue。附上 `pear status` 和失败时的 `/v1/models` 输出，一次就能定位。提交 PR 请保持 `mise run check`（vet + build）通过，并说明你动了哪条路由分支。
 
-转发前 `internal/rosetta` 会规范化请求体：来自 Anthropic 的请求故障转移到
-非 Anthropic 上游时，会剥离 `thinking.signature` 与 `cache_control`，
-否则上游会以 `400` 拒绝。
+## 📄 许可
 
-```text
-░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
-                    █▓▒░  ◆  QUOTAS & STATUS  ◆  ░▒▓█
-░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
-```
-
-```text
-▰▰ [1] BOOT  ·  load config  ·  validate providers  ·  bind 127.0.0.1:3426
-   │
-▰▰ [2] SERVE  ·  route  ·  upstream  ·  SSE passthrough  ·  sticky record
-   │
-▰▰ [3] DRIFT  ·  429 / 5xx  ·  drop candidate  ·  rehash  ·  retry bounded
-   │
-▰▰ [4] REFRESH  ·  oauth expiry  ·  rotate token  ·  persist
-```
-
-配额数据来自两处：上游在限流响应头里返回的部分，以及 Pear 自己记录的
-OAuth token 状态。两者都只读暴露——Pear 不会偷偷消耗订阅额度。
-
-```text
-░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
-                   █▓▒░  ◆  ROADMAP & SUPPORT  ◆  ░▒▓█
-░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
-```
-
-| 范围 | 状态 |
-| :-- | :-- |
-| 单二进制、三种协议 | 已完成 |
-| OAuth 续期（codex、copilot、claude） | 已完成 |
-| 会话粘性 + rosetta 净化 | 已完成 |
-| 配额接口 | 已完成 |
-| 首个正式 tag + 校验和 | 下一步 |
-| `scoop` / Homebrew / winget 清单 | 计划中 |
-| CLI 多配置文件 | 计划中 |
-| 用量统计 / 本地遥测 | 评估中 |
-
-贡献方式：开 issue 时附上请求形态和涉及的上游。带 `pear status` 输出与
-出错的 `/v1/models` 响应的问题报告，通常一轮就能定位。
-
-```text
-░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
-                        █▓▒░  ◆  LICENSE  ◆  ░▒▓█
-░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
-```
-
-MIT —— 见 [LICENSE](LICENSE)。
-
-```text
-▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-█ P E A R   ·   single binary   ·   zero third-party deps                █
-█ source  github.com/alexxhchen-nu/pear   license  MIT                   █
-▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-```
+[MIT](LICENSE) © 2026 alexxhchen
