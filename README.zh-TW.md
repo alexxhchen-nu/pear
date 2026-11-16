@@ -16,7 +16,7 @@
 
 [![Go](https://img.shields.io/badge/go-1.24%2B-00ADD8?logo=go&logoColor=white)](https://go.dev)
 [![deps](https://img.shields.io/badge/third--party%20deps-0-3FB950)](go.mod)
-[![binary](https://img.shields.io/badge/binary-7.1%20MB-3FB950)](https://github.com/alexxhchen-nu/pear/releases)
+[![binary](https://img.shields.io/badge/binary-6.3%20MB-3FB950)](https://github.com/alexxhchen-nu/pear/releases)
 [![license](https://img.shields.io/badge/license-MIT-3FB950)](LICENSE)
 ![platform](https://img.shields.io/badge/os-windows%20%7C%20linux%20%7C%20macos-8b949e)
 
