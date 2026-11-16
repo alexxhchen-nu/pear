@@ -33,6 +33,14 @@ archives:
     format_overrides:
       - goos: linux
         formats: [tar.gz]
+    # The READMEs embed assets/readme/*.svg, so ship them alongside or the
+    # image is broken for anyone who opens the archive instead of the repo.
+    files:
+      - LICENSE
+      - README.md
+      - README.zh-CN.md
+      - README.zh-TW.md
+      - assets/readme/*.svg
 
 checksum:
   name_template: checksums.txt
