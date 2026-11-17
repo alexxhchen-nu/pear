@@ -1,234 +1,282 @@
-<!-- readme-theme: phosphor-archive / archetype-c / hero-svg -->
-<div align="center">
+<p align="center">
+  <img src="assets/readme/pear.svg" alt="pear" width="72">
+</p>
 
-<img src="assets/readme/hero.svg" alt="pear — 本地 AI 閘道" width="860">
+# pear
 
-**裝一個二進位制，讓所有 AI 客戶端指向 `127.0.0.1:3426`。**
+[English](README.md) · [简体中文](README.zh-CN.md) · **繁體中文**
 
-**[English](README.md)** · [簡體中文](README.zh-CN.md) · [繁體中文](README.zh-TW.md)
+[![release](https://img.shields.io/github/v/release/alexxhchen-nu/pear)](https://github.com/alexxhchen-nu/pear/releases)
+[![license](https://img.shields.io/github/license/alexxhchen-nu/pear)](LICENSE)
+[![Go](https://img.shields.io/github/go-mod/go-version/alexxhchen-nu/pear)](go.mod)
 
-[![Go](https://img.shields.io/badge/go-1.24%2B-00ADD8?logo=go&logoColor=white)](https://go.dev)
-[![deps](https://img.shields.io/badge/third--party%20deps-0-3FB950)](go.mod)
-[![license](https://img.shields.io/badge/license-MIT-3FB950)](LICENSE)
-[![os](https://img.shields.io/badge/windows%20%C2%B7%20linux%20%C2%B7%20macos-amd64%20%C2%B7%20arm64-8b949e)](#install)
+pear 是在你這台電腦上跑的模型 API 閘道。發行的檔案是一支靜態執行檔（`CGO_ENABLED=0`）。把 Claude Code、Codex、Cursor，或其他 OpenAI、Anthropic 用戶端指到 `127.0.0.1:3426`。pear 讀取 `~/.pear/pear.json`，再把每個請求轉到你寫在裡面的上游。
 
-</div>
+適合已經有 API 金鑰，或是 Codex、GitHub Copilot、Claude 訂閱 token 的人。你要的是一個本機位址，加上一份排好順序的失敗切換名單。用戶端和上游講同一種 HTTP API。pear 會把 `model` 改成選中的上游模型。目標協定不是 `anthropic` 或 `oauth-claude` 時，也會拿掉 Anthropic 的 thinking 簽章和 `cache_control`。閘道程式用的是 Go 標準庫。`go.mod` 裡唯一的直接依賴 `go.uber.org/goleak` 只有測試會引用。
 
-## 📦 安裝
+## 安裝
 
-選一條路徑，裝完跑 `pear version`。約 1 分鐘。
-
-**1 · 用 mise 從 GitHub Releases 裝** — 不用 clone，不用 Go 工具鏈。
+用 [mise](https://mise.jdx.dev) 安裝發行版。不用複製倉庫，也不用安裝 Go。shell 要先 `mise activate`，shim 才會出現在 `PATH` 上。
 
 ```bash
-mise use -g "github:alexxhchen-nu/pear@0.1.5"
-pear version          # pear v0.1.5
+mise use -g github:alexxhchen-nu/pear@0.1.5
+pear version
 ```
 
-> mise 會隱藏釋出不滿 24 小時的版本（`minimum_release_age`）。
-> 照上面顯式寫版本號，或明天再用 `@latest`。
+輸出是 `pear v0.1.5 (Pear AI Gateway & OAuth Router)`。
 
-**2 · 用 mise 從原始碼構建** — 任何 commit 都能用，不需要 tag。
+寫這份說明時，最新的發行標籤是 `0.1.5`。寫明標籤會立刻安裝。`@latest` 會跳過比 `minimum_release_age` 還新的標籤（預設 24 小時），所以發行當天 `@latest` 仍可能選到較舊的標籤。
+
+要跟著某個分支走，就從複製下來的原始碼建置。`mise install` 依照 `mise.toml` 安裝 Go。版本字串維持 `dev`，這個工作也不會設定 `CGO_ENABLED=0`：
 
 ```bash
 git clone https://github.com/alexxhchen-nu/pear.git
 cd pear
-mise install          # 由 mise.toml 提供 Go 工具鏈
-mise run build        # -> ./pear（或 pear.exe）
+mise install
+mise run build
+./pear version
 ```
 
-**3 · `go install`** — 需要 Go 1.24+ 和已打 tag 的釋出。
+`./pear version` 輸出 `pear vdev (Pear AI Gateway & OAuth Router)`。
+
+`go install` 需要 Go 1.24 或更新的版本，印出來的同樣是 `dev`，因為只有發行建置會寫入標籤：
 
 ```bash
-go install github.com/alexxhchen-nu/pear/cmd/pear@latest
+go install github.com/alexxhchen-nu/pear/cmd/pear@v0.1.5
 ```
 
-**4 · 預編譯包** — 從
-[Releases](https://github.com/alexxhchen-nu/pear/releases) 下載，
-先拿 `checksums.txt` 核對。
+也可以從 [v0.1.5 發行頁](https://github.com/alexxhchen-nu/pear/releases/tag/v0.1.5) 下載壓縮檔。linux、darwin、windows 都有 amd64 和 arm64。Linux 是 `.tar.gz`，macOS 和 Windows 是 `.zip`。檔名類似 `pear_0.1.5_linux_amd64.tar.gz` 和 `pear_0.1.5_darwin_arm64.zip`。解開之後，`pear` 和這份說明放在一起。用同一發行裡的 `checksums.txt` 核對：
 
 ```bash
-shasum -a 256 pear_darwin_arm64.tar.gz
+sha256sum -c checksums.txt --ignore-missing
 ```
 
-> `scoop`、Homebrew、winget、AUR 還沒釋出。它們只寫在下面的路線圖裡，
-> 這裡不假裝已經有了。
+## 快速開始
 
-## ⚡ 啟動
+```bash
+mkdir -p ~/.pear
+cat > ~/.pear/pear.json << 'EOF'
+{
+  "server": {
+    "listen": "127.0.0.1:3426",
+    "default_target": "group/default"
+  },
+  "providers": [
+    {
+      "id": "openai",
+      "name": "OpenAI",
+      "protocol": "openai",
+      "base_url": "https://api.openai.com/v1",
+      "api_key": "sk-replace-me",
+      "models": ["gpt-4o-mini"]
+    }
+  ],
+  "groups": [
+    {
+      "id": "default",
+      "name": "default",
+      "members": ["openai/gpt-4o-mini"]
+    }
+  ]
+}
+EOF
+```
 
-四步，約 30 秒。
+把 `api_key` 換成真正的金鑰。`models` 和 `members` 裡的模型 id 也換成這把金鑰可以呼叫的名字。然後啟動：
 
-1. `pear status` — 看載入了什麼：providers、accounts、groups。
-2. `pear serve` — 前景閘道，監聽 `127.0.0.1:3426`。
-3. 把客戶端指過來（兩種原生 base URL 都認）：
+```bash
+pear serve
+```
+
+`pear serve` 只在啟動時讀檔。改完要重新啟動。`pear serve --port 8080` 監聽 `127.0.0.1:8080`，並蓋過 `server.listen`。`pear daemon` 是同一個行程。
+
+另開一個 shell：
+
+```bash
+curl -sS -D - http://127.0.0.1:3426/v1/chat/completions \
+  -H 'content-type: application/json' \
+  -d '{"model":"group/default","messages":[{"role":"user","content":"ping"}]}'
+```
+
+回應本文就是上游自己的本文。pear 會加上 `X-Pear-Routed-Provider: openai` 和 `X-Pear-Routed-Model: gpt-4o-mini`，轉出去的 JSON 裡 `"model"` 是 `"gpt-4o-mini"`。`model` 是空的、`auto` 或 `default` 時，走 `default_target`。`GET /health` 裡有 `"status":"ok"`。`GET /v1/models` 會列出 `group/default` 和 `openai/gpt-4o-mini`。
+
+用戶端這樣指過來：
 
 ```bash
 export ANTHROPIC_BASE_URL=http://127.0.0.1:3426
 export OPENAI_BASE_URL=http://127.0.0.1:3426/v1
 ```
 
-4. 確認它活著：
+Anthropic 用戶端在這個主機上存取 `/v1/messages`。OpenAI 用戶端會在已經帶 `/v1` 的 base 後面接 `/chat/completions`。
 
-```bash
-curl -s http://127.0.0.1:3426/health
-curl -s http://127.0.0.1:3426/v1/models
-```
-
-`pear groups` 顯示每個 group 會怎麼挑上游。
-
-## 🍐 pear 是什麼
-
-pear 跑在你自己機器上。Claude Code、Codex、Cursor、各種 SDK 或者一條
-`curl`，都只跟 `127.0.0.1:3426` 說話，由 pear 決定哪個上游賬號來服務。
-
-- **三種協議，一個埠** — Anthropic Messages、OpenAI Chat Completions、
-  OpenAI Responses 共用一個 listener，出口時自動翻譯。
-- **多個 provider，一個 URL** — `pear.json` 裡每個 provider 有自己的
-  base URL、key 和協議。group 把多個 provider 收在一個模型名後面。
-- **訂閱不會斷** — OAuth 賬號（Codex、Copilot、Claude）後臺續期，
-  CLI 掛一夜也還能用。
-- **不用裝別的東西** — 沒有資料庫，沒有 webview，沒有外掛 VM。
-  一個可執行檔案加 `~/.pear/pear.json`。
-
-## ✨ 為什麼它一直很小
-
-- **一個檔案，一個真相。** 所有平臺的配置都是 `~/.pear/pear.json`。
-  寫入走臨時檔案加 rename，崩潰不會留下寫了一半的配置。
-- **沒有鎖檔案。** 讀取方從不加鎖；啟動時讀一次，需要時再讀。
-- **沒有外掛系統。** 路由、額度解析、協議翻譯都是 `internal/` 裡的普通
-  Go 程式碼。
-- **傳輸層很無聊。** HTTP/1.1、SSE 直通、每請求一個 goroutine。
-
-`go.mod` 只有一個依賴 `go.uber.org/goleak`，且只有測試 import 它 ——
-二進位制仍然是 `net/http`、`crypto/tls` 和 `encoding/json`。
-
-## 🔀 請求怎麼路由
-
-每個請求做兩個決定，這就是全部。
-
-```text
-inbound  /v1/messages · /v1/responses
-   │
-   ▼
-sniff    model · tokens · image · folder
-   │
-   ▼
-GATE 1   rule matched?
-   │        yes -> that rule's target list
-   │        no  -> the group strategy
-   ▼
-GATE 2   candidate healthy?
-   │        yes -> forward, stream SSE back
-   │        429/5xx -> next candidate
-   ▼
-sticky   FNV-64a(session) for 60 min
-```
-
-- **GATE 1 — 路由。** 規則匹配的是請求*形狀*：token 數、是否帶圖、
-  時間段、所在目錄，或者 compaction / sub-agent 呼叫。第一條命中就贏，
-  沒有命中就走 group 策略：`smart_pace`、`session_sticky`、`order`
-  或 `round_robin`。
-- **GATE 2 — 健康。** 候選按順序試，直到有一個接下請求。`429` 或 `5xx`
-  換下一個；失敗的在整個視窗內跳過。
-- **會話粘性。** session id 會雜湊到一個偏好的成員上，同一段對話的連續
-  回合打到同一個上游賬號，prompt cache 保持熱的。
-- **淨化。** Anthropic 請求轉移到非 Anthropic 上游時，
-  `thinking.signature` 和 `cache_control` 會被剝掉 —— 否則上游回 `400`。
-
-## ⚙️ 配置
-
-全部在 `~/.pear/pear.json`，四個頂層鍵。
-
-```json
-{
-  "server": {
-    "listen": "127.0.0.1:3426",
-    "default_target": "my-group",
-    "sticky_ttl_min": 60
-  },
-  "providers": [ ... ],
-  "accounts": [ ... ],
-  "groups": [ ... ]
-}
-```
-
-- **`server`** — `listen`、`default_target`、`compact_target`、
-  `subagent_target`、`ttft_timeout_ms`、`sticky_ttl_min`。
-- **`providers[]`** — `id`、`name`、`protocol`、`base_url`、`api_key`，
-  可選 `models` 和 `off`。協議：`openai`、`anthropic`、`responses`、
-  `oauth-codex`、`oauth-copilot`、`oauth-claude`。
-- **`accounts[]`** — OAuth 訂閱：`agent`、`user`、`access_token`、
-  `refresh_token`、`expires_at`。pear 自動輪換。
-- **`groups[]`** — `id`、`strategy`、`members`，可選 `classifier` 和
-  `rules`。成員可以是 `provider/model`、另一個 group，或者任何 provider
-  都能供的裸模型名。
-
-規則描述請求，不描述提示詞：
-
-```json
-{
-  "name": "large-context",
-  "min_tokens": 120000,
-  "when_has_image": false,
-  "time_range": "09:00-18:00",
-  "folder_contains": "work/",
-  "use": ["long-context", "fallback"]
-}
-```
-
-想並排放幾套配置，就指向別的目錄：
+`PEAR_CONFIG_DIR` 換成別的目錄。開頭的 `~/` 會展開。檔名仍是 `pear.json`。
 
 ```bash
 PEAR_CONFIG_DIR=~/pear-profiles/work pear status
 ```
 
-## 🧪 CLI
+沒有 `pear.json` 時，監聽位址是 `127.0.0.1:3426`，預設目標是 `group/smart-split`，第一個位元組等待 12000 毫秒，黏著視窗 60 分鐘，provider 是空的。
 
-- `pear serve [--port N]` / `pear daemon` — 同一個閘道，前景或在
-  init 系統期望的名字下。
-- `pear status` — 配置路徑、計數、監聽地址。
-- `pear providers` / `pear groups` — 協議、策略、成員。
-- `pear quota` — 向執行中的閘道取額度快照。
-- `pear version` — 構建標記（本地構建是 `dev`）。
+## 協定
 
-## 🌐 HTTP 介面
+監聽端接受三種 POST 路徑，並照原路徑轉送。它不會把 Chat Completions 的 JSON 改寫成 Messages，也不會反過來。
 
-- `POST /v1/messages` — Anthropic Messages。
-- `POST /v1/chat/completions` — OpenAI Chat Completions。
-- `POST /v1/responses` — OpenAI Responses。
-- `GET /v1/models` / `GET /v1/pear/quotas` — 模型列表、額度快照。
-- `GET /health` — 存活檢查。
+| 路徑 | 用戶端 API |
+| --- | --- |
+| `/v1/chat/completions` | OpenAI Chat Completions |
+| `/v1/messages` | Anthropic Messages |
+| `/v1/responses` | OpenAI Responses |
 
-## 🩺 出事的時候
+`protocol` 決定憑證和清理方式：
 
-失敗由閘道負責，不推給客戶端。
+- `openai` 和 `responses` 用 `api_key` 送出 `Authorization: Bearer`。
+- `anthropic` 同時送出 `x-api-key` 和 `Authorization: Bearer`。用戶端沒帶 `Anthropic-Version` 時，pear 設成 `2023-06-01`。
+- `oauth-codex`、`oauth-copilot`、`oauth-claude` 使用帳號裡的 bearer token。見 [OAuth 帳號](#oauth-帳號)。
 
-1. `401` → 重新整理一次 token，再重試一次。
-2. `403` → 該賬號按 `Retry-After` 冷卻。
-3. `404` / `429` / `5xx` → 換下一個候選；失敗的在整個視窗內跳過。
-4. `ttft_timeout_ms` 內沒收到上游第一個位元組 → 算失敗候選，換下一個。
-5. 請求體超過 32 MB → `413`，絕不截斷。
+`base_url` 以 `/v1` 結尾，而且請求路徑以 `/v1/` 開頭時，接起來不會多出一個 `/v1`。`https://api.openai.com/v1` 加上 `/v1/chat/completions` 會變成 `https://api.openai.com/v1/chat/completions`。
 
-pear 自己產生的錯誤一律是 JSON：
-`{"type":"error","error":{"type":...,"message":...}}`，
-OpenAI 和 Anthropic 的 SDK 都能解析。沒有總響應期限：一直在出位元組的流
-會跑到上游自己結束；靜默十分鐘的流會被關閉，呼叫方不會無限等。
+`insecure_tls: true` 會略過該 provider 的 TLS 憑證檢查。
 
-## 🗺️ 路線圖
+## 路由組
 
-- ✅ 單二進位制、三種協議、四種策略。
-- ✅ OAuth 續期、會話粘性、rosetta 淨化。
-- ✅ 額度介面、`pear quota`、帶檢查碼的 tag 釋出。
-- 🔜 `scoop` · Homebrew · winget · AUR 清單。
-- 🔜 CLI 裡的配置檔。
-- 🧪 用量統計與本地遙測。
+請求裡的 `model` 決定目標。`group/<id>` 進入該組。`provider/model` 選中該 provider，就算 `models` 裡沒有這個模型也一樣。`gpt-4o-mini` 這種裸名，用第一個啟用中且 `models` 含有它的 provider。
 
-## 🤝 參與
+組內依序看 `rules`。第一條命中的規則用它的 `use` 換掉 `members`。都沒命中，就照寫下的順序走 `members`。每一項可以是 `provider/model`、`group/<id>`（最多巢狀四層），或裸模型名。`pear groups` 會印出 `strategy`。路由器不讀這個欄位。
 
-開 issue 時帶上請求形狀和涉及的 provider。附上 `pear status` 和失敗的
-`/v1/models` 輸出，一輪就能定位。提 PR：保持 `mise run check` 綠色
-（vet + build），並說明你動的是哪條路由分支。
+一次成功的回應之後，pear 用 FNV-64a 對本文前 768 個位元組做雜湊，把勝出的 `provider/model` 記住 `sticky_ttl_min` 分鐘。預設 60，寫成 `0` 也是 60。之後前綴相同的請求，如果這個目標還在候選裡，就把它移到最前面。
 
-## 📄 授權
+```json
+{
+  "id": "default",
+  "name": "default",
+  "members": ["openai/gpt-4o-mini", "backup/gpt-4o-mini"],
+  "rules": [
+    {
+      "name": "has-image",
+      "when_has_image": true,
+      "use": ["backup/gpt-4o-mini"]
+    }
+  ]
+}
+```
 
-[MIT](LICENSE) © 2026 alexxhchen
+規則裡的每個欄位都是必要條件。省略，或把布林值設成 false，不會反過來排除那些請求。一個條件都沒寫的規則永遠不命中。
+
+- `when_has_image`：本文含有 `"image"` 或 `"image_url"`。
+- `min_tokens`：和 `len(body)/4` 比較。這是大小檢查，不是分詞器算出來的 token 數。
+- `time_range`：本機時間，格式 `HH:MM-HH:MM`。開始晚於結束時，區間跨過午夜。
+- `folder_contains`：對標頭 `X-Project-Dir` 做不分大小寫的子字串比對。不讀行程的工作目錄。
+- `when_compact`：本文含有 `Summarize the conversation`、`<context-compaction>` 或 `compact the conversation`。
+- `when_subagent`：本文含有 `read-only search agent` 或 `Generate a concise title`。
+
+若設定了 `server.compact_target` 或 `server.subagent_target`，會在組規則之前換掉模型。一個候選都解不出來，而又有啟用的 provider 列出模型時，pear 用該 provider 的第一個模型。
+
+## OAuth 帳號
+
+協定用 `oauth-codex`、`oauth-copilot` 或 `oauth-claude`，並把 `api_key` 留空。pear 會找 `agent` 含有該 provider `id`、而且已啟用的帳號。沒寫 `enabled` 就當成 false。沒有啟用的帳號對上時，pear 仍會把請求轉到這個 provider，而且不帶 bearer token。
+
+```json
+{
+  "server": {
+    "default_target": "codex/your-model"
+  },
+  "providers": [
+    {
+      "id": "codex",
+      "name": "Codex",
+      "protocol": "oauth-codex",
+      "base_url": "https://api.example.com/v1",
+      "models": ["your-model"]
+    }
+  ],
+  "accounts": [
+    {
+      "id": "work",
+      "agent": "codex",
+      "user": "you@example.com",
+      "enabled": true,
+      "access_token": "replace-me",
+      "refresh_token": "replace-me",
+      "expires_at": 1764000000
+    }
+  ]
+}
+```
+
+`base_url` 填該產品自己的 API。`expires_at` 是 Unix 秒。`agent` 為 `plugin:github-copilot` 時，可以對上 id 為 `copilot` 或 `github-copilot` 的 provider。
+
+- `agent` 正好是 `codex` 時，access token 距離 `expires_at` 不到 120 秒，或上游回 401，pear 會把 `refresh_token` POST 到 `https://auth.openai.com/oauth/token`。新的 access token 只留在這個行程的記憶體裡，不會寫回 `pear.json`。
+- `agent` 含有 `github-copilot` 時，pear 用 `access_token` 向 `https://api.github.com/copilot_internal/v2/token` 換 bearer，並快取結果。
+- `oauth-claude` 和其他 agent 直接送出 `access_token`。這一版沒有它們的重新整理請求。
+
+帳號遇到 401 時，pear 清掉快取的 bearer，並對該帳號重試一次。Codex 會重新整理，Copilot 會交換，其他 agent 會再送一次原來的 access token。
+
+多個帳號都對上時，剩餘額度較高的分數較高，重設較早的分數也較高。冷卻中的帳號會被跳過。還沒有任何額度區間時，對上的帳號分數相同。區間只在 `pear serve` 行程裡更新，而且只認 Anthropic 統一的 5 小時和 7 天使用率標頭。`GET /v1/pear/quotas` 回傳這個行程的快照，access token 和 refresh token 會被遮住，`extra` 會被拿掉。`pear quota` 從檔案建一個新的池，所以區間是空的。它不會去問正在跑的閘道。
+
+403 會依 `Retry-After` 的秒數冷卻該帳號，沒有這個標頭就冷卻 15 分鐘。429 或 529 依 `Retry-After` 冷卻，沒有就冷卻 30 秒。
+
+## 設定參考
+
+省略的 `server` 欄位維持上面「檔案不存在」時的預設。`pear status`、`pear providers`、`pear groups` 每次執行都會讀檔。
+
+| 鍵 | 作用 |
+| --- | --- |
+| `server.listen` | 監聽位址。預設 `127.0.0.1:3426`。 |
+| `server.default_target` | `model` 為空、`auto` 或 `default` 時使用。 |
+| `server.compact_target` | 壓縮請求來時換掉模型。 |
+| `server.subagent_target` | 子代理請求來時換掉模型。 |
+| `server.ttft_timeout_ms` | 等待上游第一個位元組。預設 12000。`0` 也是 12000。 |
+| `server.sticky_ttl_min` | 黏著時間，單位是分鐘。預設 60。`0` 也是 60。 |
+| `providers[].id`、`name`、`protocol`、`base_url`、`api_key` | 上游的識別、位址和憑證。 |
+| `providers[].models` | 出現在 `GET /v1/models`，也用來解析裸模型名。 |
+| `providers[].off` | `true` 時停用該 provider。 |
+| `providers[].insecure_tls` | 略過 TLS 檢查。 |
+| `accounts[].id`、`agent`、`user`、`enabled` | `enabled` 必須為 true，否則跳過。 |
+| `accounts[].plan` | `pear quota` 會印出。路由不讀它。 |
+| `accounts[].access_token`、`refresh_token`、`expires_at` | 憑證。`expires_at` 是 Unix 秒。 |
+| `accounts[].extra` | 留在檔案裡。快照裡會拿掉。 |
+| `groups[].id`、`name`、`members`、`rules` | 路由器真正會走的組。 |
+| `groups[].strategy` | `pear groups` 會印出。路由器略過它。 |
+| `groups[].classifier` | 接受這個欄位，然後略過。 |
+
+## 命令
+
+```text
+pear serve [--port N]    開始監聽。--port 強制使用 127.0.0.1:N
+pear daemon [--port N]   與 serve 相同的行程
+pear status              設定路徑、監聽位址、數量
+pear providers           id、協定、base URL、模型個數、開或關
+pear groups              依序印出成員，然後是每條規則
+pear quota [--json]      檔案裡的帳號。沒有即時區間
+pear version             發行標籤，或 dev
+```
+
+不帶參數執行 `pear` 會印出圖案和這段用法。
+
+## HTTP
+
+`GET /health` 回傳狀態、provider 數、帳號數和組數。`GET /v1/models` 把每個組列成 `group/<id>`，把每個對外模型列成 `<provider>/<model>`。`GET /v1/pear/quotas` 是行程內的即時快照。POST 路由是 `/v1/chat/completions`、`/v1/messages` 和 `/v1/responses`。這些路徑上的其他方法回傳 405。
+
+pear 自己產生的錯誤是 JSON。OpenAI 用戶端讀 `error.type` 和 `error.message`。Anthropic 用戶端還會讀頂層的 `type`，其值為 `error`。
+
+```json
+{"type":"error","message":"...","error":{"type":"...","message":"..."}}
+```
+
+同一次請求裡，候選依序嘗試：
+
+1. OAuth 帳號回傳 401 時，依上一節重試該帳號一次。第二次 401 才換下一個。沒有帳號的 401 立刻換下一個。
+2. 403、404、429 和所有 5xx 都會試下一個候選。403、429 和 529 同時開始上面的冷卻。
+3. `ttft_timeout_ms` 內沒有本文的第一個位元組，就試下一個候選。這時還沒向用戶端寫出任何內容。
+4. 寫出第一個位元組之後，pear 留在這個候選上。靜默十分鐘會結束這條串流。位元組一直在來，就沒有總時限。上游回應標頭必須在 90 秒內到達。
+5. 本文超過 32 MiB 時回傳 413，不會轉送。
+
+用戶端斷線就停止這次嘗試。pear 不會因此去試另一個上游。
+
+## 參與
+
+見 [CONTRIBUTING.md](CONTRIBUTING.md)。在複製下來的倉庫裡，`mise run check` 會執行 `go vet ./...` 和 `go build ./...`。
+
+## 授權
+
+[MIT](LICENSE)。Copyright 2026 alexxhchen-nu.
