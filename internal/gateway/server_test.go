@@ -2,6 +2,8 @@ package gateway
 
 import (
 	"context"
+	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -160,5 +162,112 @@ func TestTryCandidate404FailsOver(t *testing.T) {
 	s, cand := fixture(t, up.URL)
 	if err, _ := callCandidate(t, s, cand, `{"model":"m","stream":true}`); err == nil {
 		t.Fatal("404 must fail the candidate, got nil")
+	}
+}
+
+// TestTryCandidateTTFTTimeout covers the dead ttft_timeout_ms knob: an upstream
+// that accepts the request and then stalls past the budget must fail the
+// candidate over instead of handing the caller an empty 200.
+func TestTryCandidateTTFTTimeout(t *testing.T) {
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		w.(http.Flusher).Flush()
+		time.Sleep(300 * time.Millisecond)
+		w.Write([]byte("data: late\n\n"))
+	}))
+	defer up.Close()
+
+	s, cand := fixture(t, up.URL)
+	s.cfg.Server.TTFTTimeoutMS = 60
+	err, rec := callCandidate(t, s, cand, `{"model":"m","stream":true}`)
+	if err == nil {
+		t.Fatal("stalled upstream must fail the candidate, got nil")
+	}
+	if !strings.Contains(err.Error(), "time to first byte") {
+		t.Fatalf("error must name the TTFT fault, got %v", err)
+	}
+	if rec.Body.Len() != 0 {
+		t.Fatalf("no body may be forwarded after a stall, got %q", rec.Body.String())
+	}
+}
+
+// TestTryCandidateTTFTWithinBudget proves the budget does not cut healthy
+// streams that are merely slow to start.
+func TestTryCandidateTTFTWithinBudget(t *testing.T) {
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		time.Sleep(40 * time.Millisecond)
+		w.Write([]byte("data: ok\n\n"))
+	}))
+	defer up.Close()
+
+	s, cand := fixture(t, up.URL)
+	s.cfg.Server.TTFTTimeoutMS = 2000
+	if err, rec := callCandidate(t, s, cand, `{"model":"m","stream":true}`); err != nil {
+		t.Fatalf("slow-but-in-budget stream must succeed, got %v", err)
+	} else if !strings.Contains(rec.Body.String(), "data: ok") {
+		t.Fatalf("body not forwarded, got %q", rec.Body.String())
+	}
+}
+
+type zeroReader struct{}
+
+func (zeroReader) Read(p []byte) (int, error) {
+	for i := range p {
+		p[i] = 'x'
+	}
+	return len(p), nil
+}
+
+// TestProxyRejectsOversizedBody covers the defect where io.LimitReader silently
+// truncated an oversized body and forwarded a malformed prompt upstream.
+func TestProxyRejectsOversizedBody(t *testing.T) {
+	s, _ := fixture(t, "http://127.0.0.1:1")
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", io.LimitReader(zeroReader{}, maxRequestBodyBytes+1))
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("want 413, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var env struct {
+		Type  string `json:"type"`
+		Error struct {
+			Type string `json:"type"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &env); err != nil {
+		t.Fatalf("error body must be JSON, got %q", rec.Body.String())
+	}
+	if env.Type != "error" || env.Error.Type != "request_too_large" {
+		t.Fatalf("wrong envelope: %+v", env)
+	}
+}
+
+// TestProxyExhaustedIsJSONError covers the defect where an all-candidates-fail
+// run returned a plaintext 502 that no SDK could parse.
+func TestProxyExhaustedIsJSONError(t *testing.T) {
+	cfg := &config.Config{Server: config.ServerConfig{Listen: "127.0.0.1:0"}}
+	pool := oauth.NewPool(nil)
+	s := NewServer(cfg, pool, router.NewEngine(cfg, pool))
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"nope"}`))
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("want 502, got %d", rec.Code)
+	}
+	var env map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &env); err != nil {
+		t.Fatalf("error body must be JSON, got %q", rec.Body.String())
+	}
+	if env["type"] != "error" {
+		t.Fatalf("want type=error, got %+v", env)
+	}
+	if _, ok := env["error"].(map[string]any); !ok {
+		t.Fatalf("want nested error object, got %+v", env)
+	}
+	if ct := rec.Header().Get("Content-Type"); ct != "application/json" {
+		t.Fatalf("want application/json, got %q", ct)
 	}
 }

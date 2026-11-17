@@ -30,7 +30,7 @@ pear 是跑在你自己机器上的网关。把 Claude Code、Codex、Cursor、�
 - **没有插件系统。** 路由、配额解析、协议转换都是 `internal/` 里的普通 Go 代码。
 - **传输层保持无聊。** HTTP/1.1、SSE 透传、每个请求一个 goroutine。
 
-`go.mod` 里没有 `require` 块 —— 整个项目只用了标准库的 `net/http`、`crypto/tls` 和 `encoding/json`。
+`go.mod` 只有一个依赖 `go.uber.org/goleak`，且仅测试代码引用 —— 二进制仍然只用标准库的 `net/http`、`crypto/tls` 和 `encoding/json`。
 
 ## 📦 安装
 
@@ -177,6 +177,12 @@ PEAR_CONFIG_DIR=~/pear-profiles/work pear status
 - `GET /v1/models` —— 聚合后的模型列表。
 - `GET /v1/pear/quotas` —— 逐账号配额快照。
 - `GET /health` —— 存活检查。
+故障由网关负责，不交给客户端：`401` 先刷新一次令牌并原候选重试一次，
+`403` 按 `Retry-After` 让该账号冷却，`404`/`429`/`5xx` 切换到下一个候选，
+上游在 `ttft_timeout_ms` 内没吐出首字节也算候选失败。请求体超过 32 MB
+直接返回 `413`，不再静默截断。pear 自己产生的错误统一是 JSON
+`{"type":"error","error":{"type":...,"message":...}}`，
+OpenAI 与 Anthropic 的 SDK 都能解析。
 
 ## 🗺️ 路线图
 

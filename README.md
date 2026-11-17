@@ -41,8 +41,8 @@ account serves the request.
   ordinary Go code in `internal/`.
 - **Boring transport.** HTTP/1.1, SSE passthrough, one goroutine per request.
 
-`go.mod` has no `require` block — the whole thing is `net/http`,
-`crypto/tls` and `encoding/json` from the standard library.
+`go.mod` has one requirement, `go.uber.org/goleak`, and only the tests
+import it — the binary is still `net/http`, `crypto/tls` and `encoding/json`.
 
 ## 📦 Install
 
@@ -208,6 +208,15 @@ PEAR_CONFIG_DIR=~/pear-profiles/work pear status
 - `GET /v1/models` — aggregated model list.
 - `GET /v1/pear/quotas` — per-account quota snapshot.
 - `GET /health` — liveness.
+
+Failures are the gateway's job, not the client's: `401` triggers one token
+refresh and a single retry, `403` benches the account for `Retry-After`,
+`404`/`429`/`5xx` fail over to the next candidate, and an upstream that sends
+no first byte within `ttft_timeout_ms` counts as a failed candidate. A request
+body above 32 MB is rejected with `413` instead of being truncated. Every
+error pear generates is JSON shaped
+`{"type":"error","error":{"type":...,"message":...}}`, which both OpenAI and
+Anthropic SDKs can parse.
 
 ## 🗺️ Roadmap
 

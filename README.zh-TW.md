@@ -30,7 +30,7 @@ pear 是跑在你自己機器上的閘道器。把 Claude Code、Codex、Cursor�
 - **沒有外掛系統。** 路由、配額解析、協議轉換都是 `internal/` 裡的普通 Go 程式碼。
 - **傳輸層保持無聊。** HTTP/1.1、SSE 透傳、每個請求一個 goroutine。
 
-`go.mod` 裡沒有 `require` 塊 —— 整個專案只用了標準庫的 `net/http`、`crypto/tls` 和 `encoding/json`。
+`go.mod` 只有一個依賴 `go.uber.org/goleak`，且僅測試程式碼引用 —— 二進位檔仍然只用標準庫的 `net/http`、`crypto/tls` 和 `encoding/json`。
 
 ## 📦 安裝
 
@@ -177,6 +177,12 @@ PEAR_CONFIG_DIR=~/pear-profiles/work pear status
 - `GET /v1/models` —— 聚合後的模型列表。
 - `GET /v1/pear/quotas` —— 逐帳號配額快照。
 - `GET /health` —— 存活檢查。
+故障由閘道負責，不交給客戶端：`401` 先刷新一次權杖並對原候選重試一次，
+`403` 依 `Retry-After` 讓該帳號冷卻，`404`/`429`/`5xx` 切換到下一個候選，
+上游在 `ttft_timeout_ms` 內沒吐出首個位元組也算候選失敗。請求內容超過 32 MB
+直接回傳 `413`，不再靜默截斷。pear 自己產生的錯誤一律是 JSON
+`{"type":"error","error":{"type":...,"message":...}}`，
+OpenAI 與 Anthropic 的 SDK 都能解析。
 
 ## 🗺️ 路線圖
 

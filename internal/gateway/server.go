@@ -20,6 +20,29 @@ import (
 	"github.com/alexxhchen-nu/pear/internal/router"
 )
 
+// maxRequestBodyBytes caps a proxied request body. Exceeding it is an error,
+// never a silent truncation.
+const maxRequestBodyBytes = 32 << 20
+
+// writeError emits one body that satisfies both client families: OpenAI reads
+// error.{type,message}, Anthropic reads type=error with error.{type,message}.
+func writeError(w http.ResponseWriter, status int, typ, msg string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(map[string]any{
+		"type":    "error",
+		"message": msg,
+		"error": map[string]any{
+			"type":    typ,
+			"message": msg,
+		},
+	})
+}
+
+// errTTFTTimeout marks an upstream that accepted the request but never started
+// streaming within the configured budget.
+var errTTFTTimeout = errors.New("time to first byte exceeded")
+
 // errClientGone marks a request the caller abandoned. It is not an upstream
 // failure, so it must not trigger failover or taint the candidate.
 var errClientGone = errors.New("client disconnected")
@@ -107,12 +130,20 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		writeError(w, http.StatusMethodNotAllowed, "invalid_request_error", "method not allowed: use POST")
 		return
 	}
-	body, err := io.ReadAll(io.LimitReader(r.Body, 32*1024*1024))
+	// MaxBytesReader rejects instead of silently truncating: a 32 MB cap that
+	// quietly cut the body produced a malformed prompt upstream.
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxRequestBodyBytes))
 	if err != nil {
-		http.Error(w, "Failed to read request body", http.StatusBadRequest)
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			writeError(w, http.StatusRequestEntityTooLarge, "request_too_large",
+				fmt.Sprintf("request body exceeds %d bytes", maxRequestBodyBytes))
+			return
+		}
+		writeError(w, http.StatusBadRequest, "invalid_request_error", "failed to read request body: "+err.Error())
 		return
 	}
 	defer r.Body.Close()
@@ -128,7 +159,7 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 
 	candidates, err := s.engine.ResolveCandidates(feat)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadGateway)
+		writeError(w, http.StatusBadGateway, "routing_error", err.Error())
 		return
 	}
 
@@ -147,7 +178,8 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 		log.Printf("[pear-failover] candidate #%d (%s/%s) failed: %v", idx+1, cand.Provider.ID, cand.Model, err)
 	}
 
-	http.Error(w, fmt.Sprintf("Pear gateway exhausted all %d candidates; last error: %v", len(candidates), lastErr), http.StatusBadGateway)
+	writeError(w, http.StatusBadGateway, "upstream_error",
+		fmt.Sprintf("pear gateway exhausted all %d candidates; last error: %v", len(candidates), lastErr))
 }
 
 // doUpstream builds and executes one upstream attempt for a candidate.
@@ -194,6 +226,32 @@ func (s *Server) doUpstream(ctx context.Context, inReq *http.Request, cand route
 		client = s.insecureClient
 	}
 	return client.Do(req)
+}
+
+// readFirstChunk reads one chunk, giving up after timeout or when the caller
+// goes away. The reader goroutine exits once the body is closed.
+func readFirstChunk(ctx context.Context, body io.Reader, timeout time.Duration) ([]byte, error) {
+	type chunk struct {
+		b   []byte
+		n   int
+		err error
+	}
+	ch := make(chan chunk, 1)
+	go func() {
+		b := make([]byte, 16*1024)
+		n, err := body.Read(b)
+		ch <- chunk{b, n, err}
+	}()
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case got := <-ch:
+		return got.b[:got.n], got.err
+	case <-timer.C:
+		return nil, errTTFTTimeout
+	case <-ctx.Done():
+		return nil, errClientGone
+	}
 }
 
 // drainAndClose releases a response we are about to abandon so the connection
@@ -267,6 +325,21 @@ func (s *Server) tryCandidate(
 		return fmt.Errorf("upstream HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(errBody)))
 	}
 
+	// Prime the first chunk before committing headers: an upstream that accepts
+	// the request and then sends nothing must fail over, not hand the caller an
+	// empty 200. TTFTTimeoutMS is the budget for that first byte.
+	ttft := time.Duration(s.cfg.Server.TTFTTimeoutMS) * time.Millisecond
+	if ttft <= 0 {
+		ttft = 12 * time.Second
+	}
+	first, firstErr := readFirstChunk(ctx, resp.Body, ttft)
+	if firstErr != nil && !errors.Is(firstErr, io.EOF) {
+		if ctx.Err() != nil {
+			return errClientGone
+		}
+		return fmt.Errorf("no first byte from upstream: %w", firstErr)
+	}
+
 	// Forward response headers & stream body
 	for k, vals := range resp.Header {
 		for _, v := range vals {
@@ -278,6 +351,27 @@ func (s *Server) tryCandidate(
 	w.WriteHeader(resp.StatusCode)
 
 	flusher, canFlush := w.(http.Flusher)
+	if len(first) > 0 {
+		if _, writeErr := w.Write(first); writeErr != nil {
+			if ctx.Err() != nil {
+				return errClientGone
+			}
+			return fmt.Errorf("client write failed: %w", writeErr)
+		}
+		if canFlush {
+			flusher.Flush()
+		}
+	}
+	if firstErr != nil {
+		if errors.Is(firstErr, io.EOF) {
+			return nil
+		}
+		if ctx.Err() != nil {
+			return errClientGone
+		}
+		return fmt.Errorf("upstream stream fault: %w", firstErr)
+	}
+
 	buf := make([]byte, 16*1024)
 	for {
 		n, readErr := resp.Body.Read(buf)
