@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -17,6 +18,10 @@ import (
 	"github.com/alexxhchen-nu/pear/internal/rosetta"
 	"github.com/alexxhchen-nu/pear/internal/router"
 )
+
+// errClientGone marks a request the caller abandoned. It is not an upstream
+// failure, so it must not trigger failover or taint the candidate.
+var errClientGone = errors.New("client disconnected")
 
 // Server is the core Pear HTTP gateway.
 type Server struct {
@@ -133,6 +138,10 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 			s.engine.RecordSuccess(feat.SessionHash, cand)
 			return
 		}
+		if errors.Is(err, errClientGone) {
+			// The caller hung up; no failover can help and nothing is left to write.
+			return
+		}
 		lastErr = err
 		log.Printf("[pear-failover] candidate #%d (%s/%s) failed: %v", idx+1, cand.Provider.ID, cand.Model, err)
 	}
@@ -223,17 +232,27 @@ func (s *Server) tryCandidate(
 		n, readErr := resp.Body.Read(buf)
 		if n > 0 {
 			if _, writeErr := w.Write(buf[:n]); writeErr != nil {
-				return nil
+				if ctx.Err() != nil {
+					return errClientGone
+				}
+				return fmt.Errorf("client write failed: %w", writeErr)
 			}
 			if canFlush {
 				flusher.Flush()
 			}
 		}
 		if readErr != nil {
-			break
+			if errors.Is(readErr, io.EOF) {
+				return nil
+			}
+			// A cut-off upstream stream must never be recorded as success:
+			// the client received a partial body and the candidate is unhealthy.
+			if ctx.Err() != nil {
+				return errClientGone
+			}
+			return fmt.Errorf("upstream stream fault: %w", readErr)
 		}
 	}
-	return nil
 }
 
 func buildUpstreamURL(baseURL, reqPath string) string {
