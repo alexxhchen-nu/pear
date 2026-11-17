@@ -15,6 +15,9 @@ builds:
     flags:
       - -trimpath
     ldflags:
+      # Single source of truth for the stamp. `mise run build` passes
+      # PEAR_VERSION (git describe, leading v stripped) through the snapshot
+      # template below; a real release leaves it unset and uses the tag.
       - -s -w -X main.version={{ .Version }}
     goos:
       - windows
@@ -24,6 +27,12 @@ builds:
       - amd64
       - arm64
     mod_timestamp: "{{ .CommitTimestamp }}"
+
+snapshot:
+  # `mise run build` sets PEAR_VERSION. A missing key must not error:
+  # GoReleaser templates use missingkey=error, so .Env.PEAR_VERSION
+  # aborts `mise run snapshot` when the variable is unset.
+  version_template: '{{ if isEnvSet "PEAR_VERSION" }}{{ envOrDefault "PEAR_VERSION" "" }}{{ else }}{{ .Version }}-SNAPSHOT-{{ .ShortCommit }}{{ end }}'
 
 archives:
   - id: pear

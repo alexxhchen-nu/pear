@@ -1,0 +1,61 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ hashFiles('go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
+      # Go and goreleaser come from mise.toml / mise.lock, the same
+      # toolchain `mise install` gives a contributor.
+      - uses: jdx/mise-action@v5
+
+      - name: Check formatting
+        run: mise run fmt:check
+
+      - name: Vet and compile
+        run: mise run check
+
+      - name: Test
+        run: go test -race ./...
+
+      - name: Build static binary
+        run: |
+          mise run build
+          file pear
+          ldd pear || true
+          file pear | grep -q 'statically linked'
+          ./pear version | tee version.txt
+          grep -q '^pear v' version.txt
+          if grep -q 'pear vdev ' version.txt; then
+            echo "version was not stamped" >&2
+            exit 1
+          fi
+
+      - name: Check GoReleaser config
+        run: mise run release:check
