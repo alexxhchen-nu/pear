@@ -30,6 +30,10 @@ type AccountState struct {
 	LastUsed     time.Time            `json:"last_used,omitempty"`
 	BearerCached string               `json:"-"`
 	BearerExpiry time.Time            `json:"-"`
+
+	// forceRefresh makes the next ResolveBearerToken ignore the cache. Set by
+	// ForceRefresh after an upstream 401, cleared once a token is fetched.
+	forceRefresh bool
 }
 
 // Pool manages all OAuth subscription accounts and passive quota windows.
@@ -132,7 +136,9 @@ func (p *Pool) ResolveBearerToken(st *AccountState) (string, error) {
 	defer p.mu.Unlock()
 
 	now := time.Now()
-	if st.BearerCached != "" && now.Add(2*time.Minute).Before(st.BearerExpiry) {
+	force := st.forceRefresh
+	st.forceRefresh = false
+	if !force && st.BearerCached != "" && now.Add(2*time.Minute).Before(st.BearerExpiry) {
 		return st.BearerCached, nil
 	}
 
@@ -147,7 +153,8 @@ func (p *Pool) ResolveBearerToken(st *AccountState) (string, error) {
 	}
 
 	// OpenAI Codex OAuth refresh if expired
-	if st.Account.Agent == "codex" && st.Account.ExpiresAt > 0 && now.Unix() > st.Account.ExpiresAt-120 && st.Account.RefreshToken != "" {
+	codexExpired := st.Account.ExpiresAt > 0 && now.Unix() > st.Account.ExpiresAt-120
+	if st.Account.Agent == "codex" && (force || codexExpired) && st.Account.RefreshToken != "" {
 		if tok, exp, err := p.refreshCodexToken(st.Account.RefreshToken); err == nil {
 			st.Account.AccessToken = tok
 			st.Account.ExpiresAt = exp.Unix()
@@ -223,6 +230,36 @@ func (p *Pool) refreshCodexToken(refreshToken string) (string, time.Time, error)
 }
 
 // ObserveResponseHeaders passively updates quota windows from Anthropic / OpenAI / Codex response headers.
+// ForceRefresh drops the cached bearer token so the next ResolveBearerToken
+// performs a real exchange/refresh. Called when the upstream answers 401.
+func (p *Pool) ForceRefresh(st *AccountState) {
+	if st == nil {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	st.BearerCached = ""
+	st.BearerExpiry = time.Time{}
+	st.forceRefresh = true
+}
+
+// MarkCooldown benches an account for d. Called on 403 so a revoked or
+// geo-blocked account stops being selected instead of absorbing every request.
+func (p *Pool) MarkCooldown(accountID string, d time.Duration) {
+	if accountID == "" || d <= 0 {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	st, ok := p.accounts[accountID]
+	if !ok {
+		return
+	}
+	if until := time.Now().Add(d); until.After(st.CooldownTil) {
+		st.CooldownTil = until
+	}
+}
+
 func (p *Pool) ObserveResponseHeaders(accountID string, h http.Header, statusCode int) {
 	p.mu.Lock()
 	defer p.mu.Unlock()

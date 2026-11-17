@@ -10,6 +10,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -149,20 +150,13 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 	http.Error(w, fmt.Sprintf("Pear gateway exhausted all %d candidates; last error: %v", len(candidates), lastErr), http.StatusBadGateway)
 }
 
-func (s *Server) tryCandidate(
-	ctx context.Context,
-	w http.ResponseWriter,
-	inReq *http.Request,
-	rawBody []byte,
-	feat router.RequestFeatures,
-	cand router.TargetCandidate,
-) error {
-	rewritten := rosetta.SanitizeAndRewriteRequest(rawBody, cand.Model, cand.Provider.Protocol)
+// doUpstream builds and executes one upstream attempt for a candidate.
+func (s *Server) doUpstream(ctx context.Context, inReq *http.Request, cand router.TargetCandidate, body []byte) (*http.Response, error) {
 	upstreamURL := buildUpstreamURL(cand.Provider.BaseURL, inReq.URL.Path)
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, upstreamURL, bytes.NewReader(rewritten))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, upstreamURL, bytes.NewReader(body))
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	// Copy safe headers
@@ -199,19 +193,76 @@ func (s *Server) tryCandidate(
 	if cand.Provider.InsecureTLS {
 		client = s.insecureClient
 	}
+	return client.Do(req)
+}
 
-	resp, err := client.Do(req)
+// drainAndClose releases a response we are about to abandon so the connection
+// can be reused instead of being dropped.
+func drainAndClose(b io.ReadCloser) {
+	io.CopyN(io.Discard, b, 4096)
+	b.Close()
+}
+
+// isCandidateFailure reports statuses that mean "this candidate is wrong",
+// never "the caller did something wrong".
+func isCandidateFailure(code int) bool {
+	switch code {
+	case http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound, http.StatusTooManyRequests:
+		return true
+	}
+	return code >= 500
+}
+
+// cooldownFromHeaders honours Retry-After (seconds) and falls back to def.
+func cooldownFromHeaders(h http.Header, def time.Duration) time.Duration {
+	if ra := h.Get("Retry-After"); ra != "" {
+		if v, err := strconv.Atoi(ra); err == nil && v > 0 {
+			return time.Duration(v) * time.Second
+		}
+	}
+	return def
+}
+
+func (s *Server) tryCandidate(
+	ctx context.Context,
+	w http.ResponseWriter,
+	inReq *http.Request,
+	rawBody []byte,
+	feat router.RequestFeatures,
+	cand router.TargetCandidate,
+) error {
+	rewritten := rosetta.SanitizeAndRewriteRequest(rawBody, cand.Model, cand.Provider.Protocol)
+
+	resp, err := s.doUpstream(ctx, inReq, cand, rewritten)
 	if err != nil {
 		return err
+	}
+
+	// 401: the credential may have been rotated upstream. Refresh once and
+	// retry the same candidate; only a second 401 counts as a failure.
+	if resp.StatusCode == http.StatusUnauthorized && cand.Account != nil {
+		drainAndClose(resp.Body)
+		s.pool.ForceRefresh(cand.Account)
+		retry, retryErr := s.doUpstream(ctx, inReq, cand, rewritten)
+		if retryErr != nil {
+			return retryErr
+		}
+		resp = retry
 	}
 	defer resp.Body.Close()
 
 	if cand.Account != nil {
 		s.pool.ObserveResponseHeaders(cand.Account.Account.ID, resp.Header, resp.StatusCode)
+		if resp.StatusCode == http.StatusForbidden {
+			// Scope revoked or account restricted: bench it rather than have
+			// every following request pay for the same rejection.
+			s.pool.MarkCooldown(cand.Account.Account.ID, cooldownFromHeaders(resp.Header, 15*time.Minute))
+		}
 	}
 
-	// Failover on 429 / 502 / 503 / 529 before writing headers to client
-	if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500 {
+	// Any auth/route/limit failure fails this candidate over before headers
+	// reach the client, so the caller never sees a bare 401/403/404.
+	if isCandidateFailure(resp.StatusCode) {
 		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
 		return fmt.Errorf("upstream HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(errBody)))
 	}

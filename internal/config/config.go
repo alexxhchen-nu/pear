@@ -16,12 +16,12 @@ type Config struct {
 }
 
 type ServerConfig struct {
-	Listen          string `json:"listen"`
-	DefaultTarget   string `json:"default_target"`
-	CompactTarget   string `json:"compact_target"`
-	SubagentTarget  string `json:"subagent_target"`
-	TTFTTimeoutMS   int    `json:"ttft_timeout_ms"`
-	StickyTTLMin    int    `json:"sticky_ttl_min"`
+	Listen         string `json:"listen"`
+	DefaultTarget  string `json:"default_target"`
+	CompactTarget  string `json:"compact_target"`
+	SubagentTarget string `json:"subagent_target"`
+	TTFTTimeoutMS  int    `json:"ttft_timeout_ms"`
+	StickyTTLMin   int    `json:"sticky_ttl_min"`
 }
 
 type ProviderConfig struct {
@@ -57,14 +57,14 @@ type GroupConfig struct {
 }
 
 type RouteRule struct {
-	Name            string   `json:"name,omitempty"`
-	WhenCompact     bool     `json:"when_compact,omitempty"`
-	WhenSubagent    bool     `json:"when_subagent,omitempty"`
-	WhenHasImage    bool     `json:"when_has_image,omitempty"`
-	MinTokens       int      `json:"min_tokens,omitempty"`
-	TimeRange       string   `json:"time_range,omitempty"` // e.g., "09:00-18:00"
-	FolderContains  string   `json:"folder_contains,omitempty"`
-	Use             []string `json:"use"`
+	Name           string   `json:"name,omitempty"`
+	WhenCompact    bool     `json:"when_compact,omitempty"`
+	WhenSubagent   bool     `json:"when_subagent,omitempty"`
+	WhenHasImage   bool     `json:"when_has_image,omitempty"`
+	MinTokens      int      `json:"min_tokens,omitempty"`
+	TimeRange      string   `json:"time_range,omitempty"` // e.g., "09:00-18:00"
+	FolderContains string   `json:"folder_contains,omitempty"`
+	Use            []string `json:"use"`
 }
 
 // DefaultConfigDir returns the directory holding pear.json.
@@ -127,4 +127,3 @@ func Save(path string, cfg *Config) error {
 	}
 	return os.Rename(tmp, path)
 }
-
