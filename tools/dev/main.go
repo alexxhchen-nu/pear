@@ -57,12 +57,17 @@ func describeVersion() string {
 }
 
 func build() error {
+	version := describeVersion()
+	out := binaryName()
+	// GoReleaser v2 returns ErrNoGit when the git binary is missing, even
+	// with --snapshot. A source archive still needs a static binary; the
+	// flags here are the same ones .goreleaser.yaml passes to the release.
+	if _, err := exec.LookPath("git"); err != nil {
+		fmt.Fprintln(os.Stderr, "git not found; building with go (version dev)")
+		return goBuild(out, "dev")
+	}
 	if _, err := exec.LookPath("goreleaser"); err != nil {
 		return fmt.Errorf("goreleaser not found (run mise install): %w", err)
-	}
-	out := "pear"
-	if runtime.GOOS == "windows" {
-		out = "pear.exe"
 	}
 	cmd := exec.Command(
 		"goreleaser", "build",
@@ -71,12 +76,35 @@ func build() error {
 		"--clean",
 		"--output", out,
 	)
-	cmd.Env = append(os.Environ(), "PEAR_VERSION="+describeVersion())
+	cmd.Env = append(os.Environ(), "PEAR_VERSION="+version)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("goreleaser build: %w", err)
 	}
+	return runVersion(out)
+}
+
+func binaryName() string {
+	if runtime.GOOS == "windows" {
+		return "pear.exe"
+	}
+	return "pear"
+}
+
+func goBuild(out, version string) error {
+	ldflags := "-s -w -X main.version=" + version
+	cmd := exec.Command("go", "build", "-trimpath", "-ldflags", ldflags, "-o", out, "./cmd/pear")
+	cmd.Env = append(os.Environ(), "CGO_ENABLED=0")
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("go build: %w", err)
+	}
+	return runVersion(out)
+}
+
+func runVersion(out string) error {
 	// Abs keeps a path separator. filepath.Join(".", "pear") cleans to
 	// "pear", and exec would then search PATH instead of the file just built.
 	bin, err := filepath.Abs(out)

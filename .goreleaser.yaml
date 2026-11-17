@@ -29,8 +29,10 @@ builds:
     mod_timestamp: "{{ .CommitTimestamp }}"
 
 snapshot:
-  # Empty PEAR_VERSION keeps GoReleaser's usual snapshot name for CI.
-  version_template: '{{ if .Env.PEAR_VERSION }}{{ .Env.PEAR_VERSION }}{{ else }}{{ .Version }}-SNAPSHOT-{{ .ShortCommit }}{{ end }}'
+  # `mise run build` sets PEAR_VERSION. A missing key must not error:
+  # GoReleaser templates use missingkey=error, so .Env.PEAR_VERSION
+  # aborts `mise run snapshot` when the variable is unset.
+  version_template: '{{ if isEnvSet "PEAR_VERSION" }}{{ envOrDefault "PEAR_VERSION" "" }}{{ else }}{{ .Version }}-SNAPSHOT-{{ .ShortCommit }}{{ end }}'
 
 archives:
   - id: pear
