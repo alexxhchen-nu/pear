@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 	"text/tabwriter"
+	"time"
 
 	"github.com/alexxhchen-nu/pear/internal/config"
 	"github.com/alexxhchen-nu/pear/internal/gateway"
@@ -200,7 +201,16 @@ func runServe(args []string) {
 	)
 	log.Printf("[Pear] Starting gateway on http://%s (%d providers, %d OAuth accounts)...",
 		cfg.Server.Listen, len(cfg.Providers), len(cfg.Accounts))
-	if err := http.ListenAndServe(cfg.Server.Listen, srv.Handler()); err != nil {
+	// Header and idle waits are bounded; the response write is not, because a
+	// streaming completion is allowed to run as long as the upstream keeps
+	// sending bytes.
+	httpSrv := &http.Server{
+		Addr:              cfg.Server.Listen,
+		Handler:           srv.Handler(),
+		ReadHeaderTimeout: 15 * time.Second,
+		IdleTimeout:       120 * time.Second,
+	}
+	if err := httpSrv.ListenAndServe(); err != nil {
 		log.Fatalf("[Pear] Server stopped: %v", err)
 	}
 }

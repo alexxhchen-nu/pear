@@ -216,7 +216,9 @@ no first byte within `ttft_timeout_ms` counts as a failed candidate. A request
 body above 32 MB is rejected with `413` instead of being truncated. Every
 error pear generates is JSON shaped
 `{"type":"error","error":{"type":...,"message":...}}`, which both OpenAI and
-Anthropic SDKs can parse.
+Anthropic SDKs can parse. There is no total response deadline: a stream that
+keeps producing bytes runs until the upstream ends it, and a stream that goes
+silent for ten minutes is closed, so a caller never waits forever.
 
 ## 🗺️ Roadmap
 

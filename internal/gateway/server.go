@@ -56,19 +56,35 @@ type Server struct {
 	insecureClient *http.Client
 }
 
+// upstreamIdleTimeout bounds the wait for the next chunk once a stream is
+// running. A stalled stream is terminated instead of hanging a caller forever;
+// it is not a total deadline, so a slow-but-alive generation runs as long as it
+// keeps sending bytes.
+var upstreamIdleTimeout = 10 * time.Minute
+
+// upstreamHeaderTimeout bounds the wait for response headers only. The totals
+// are deliberately unbounded: a hard client Timeout used to cut legitimately
+// long SSE responses off mid-stream.
+const upstreamHeaderTimeout = 90 * time.Second
+
+func upstreamTransport(tlsCfg *tls.Config) *http.Transport {
+	return &http.Transport{
+		TLSClientConfig:       tlsCfg,
+		ForceAttemptHTTP2:     true,
+		ResponseHeaderTimeout: upstreamHeaderTimeout,
+		TLSHandshakeTimeout:   15 * time.Second,
+		IdleConnTimeout:       90 * time.Second,
+	}
+}
+
 func NewServer(cfg *config.Config, pool *oauth.Pool, engine *router.Engine) *Server {
 	return &Server{
-		cfg:    cfg,
-		pool:   pool,
-		engine: engine,
-		standardClient: &http.Client{
-			Timeout: 10 * time.Minute,
-		},
+		cfg:            cfg,
+		pool:           pool,
+		engine:         engine,
+		standardClient: &http.Client{Transport: upstreamTransport(nil)},
 		insecureClient: &http.Client{
-			Timeout: 10 * time.Minute,
-			Transport: &http.Transport{
-				TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-			},
+			Transport: upstreamTransport(&tls.Config{InsecureSkipVerify: true}),
 		},
 	}
 }
@@ -165,9 +181,16 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 
 	var lastErr error
 	for idx, cand := range candidates {
-		err := s.tryCandidate(r.Context(), w, r, body, feat, cand)
+		committed, err := s.tryCandidate(r.Context(), w, r, body, feat, cand)
 		if err == nil {
 			s.engine.RecordSuccess(feat.SessionHash, cand)
+			return
+		}
+		if committed {
+			// Headers and part of the body are already on the wire. Failover
+			// would append a second response to a half-written stream, so all
+			// that is left is to end the request and log the fault.
+			log.Printf("[pear-stream-abort] %s/%s after commit: %v", cand.Provider.ID, cand.Model, err)
 			return
 		}
 		if errors.Is(err, errClientGone) {
@@ -228,9 +251,13 @@ func (s *Server) doUpstream(ctx context.Context, inReq *http.Request, cand route
 	return client.Do(req)
 }
 
-// readFirstChunk reads one chunk, giving up after timeout or when the caller
-// goes away. The reader goroutine exits once the body is closed.
-func readFirstChunk(ctx context.Context, body io.Reader, timeout time.Duration) ([]byte, error) {
+// errUpstreamStalled marks a stream that started and then stopped sending
+// within the idle budget.
+var errUpstreamStalled = errors.New("upstream stream stalled")
+
+// readChunk reads one chunk, giving up after timeout or when the caller goes
+// away. The reader goroutine exits once the body is closed.
+func readChunk(ctx context.Context, body io.Reader, timeout time.Duration) ([]byte, error) {
 	type chunk struct {
 		b   []byte
 		n   int
@@ -281,6 +308,8 @@ func cooldownFromHeaders(h http.Header, def time.Duration) time.Duration {
 	return def
 }
 
+// tryCandidate reports whether any part of a response reached the client. Once
+// committed, the caller must not attempt another candidate.
 func (s *Server) tryCandidate(
 	ctx context.Context,
 	w http.ResponseWriter,
@@ -288,12 +317,12 @@ func (s *Server) tryCandidate(
 	rawBody []byte,
 	feat router.RequestFeatures,
 	cand router.TargetCandidate,
-) error {
+) (bool, error) {
 	rewritten := rosetta.SanitizeAndRewriteRequest(rawBody, cand.Model, cand.Provider.Protocol)
 
 	resp, err := s.doUpstream(ctx, inReq, cand, rewritten)
 	if err != nil {
-		return err
+		return false, err
 	}
 
 	// 401: the credential may have been rotated upstream. Refresh once and
@@ -303,7 +332,7 @@ func (s *Server) tryCandidate(
 		s.pool.ForceRefresh(cand.Account)
 		retry, retryErr := s.doUpstream(ctx, inReq, cand, rewritten)
 		if retryErr != nil {
-			return retryErr
+			return false, retryErr
 		}
 		resp = retry
 	}
@@ -322,7 +351,7 @@ func (s *Server) tryCandidate(
 	// reach the client, so the caller never sees a bare 401/403/404.
 	if isCandidateFailure(resp.StatusCode) {
 		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-		return fmt.Errorf("upstream HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(errBody)))
+		return false, fmt.Errorf("upstream HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(errBody)))
 	}
 
 	// Prime the first chunk before committing headers: an upstream that accepts
@@ -332,12 +361,12 @@ func (s *Server) tryCandidate(
 	if ttft <= 0 {
 		ttft = 12 * time.Second
 	}
-	first, firstErr := readFirstChunk(ctx, resp.Body, ttft)
+	first, firstErr := readChunk(ctx, resp.Body, ttft)
 	if firstErr != nil && !errors.Is(firstErr, io.EOF) {
 		if ctx.Err() != nil {
-			return errClientGone
+			return false, errClientGone
 		}
-		return fmt.Errorf("no first byte from upstream: %w", firstErr)
+		return false, fmt.Errorf("no first byte from upstream: %w", firstErr)
 	}
 
 	// Forward response headers & stream body
@@ -354,9 +383,9 @@ func (s *Server) tryCandidate(
 	if len(first) > 0 {
 		if _, writeErr := w.Write(first); writeErr != nil {
 			if ctx.Err() != nil {
-				return errClientGone
+				return true, errClientGone
 			}
-			return fmt.Errorf("client write failed: %w", writeErr)
+			return true, fmt.Errorf("client write failed: %w", writeErr)
 		}
 		if canFlush {
 			flusher.Flush()
@@ -364,23 +393,24 @@ func (s *Server) tryCandidate(
 	}
 	if firstErr != nil {
 		if errors.Is(firstErr, io.EOF) {
-			return nil
+			return true, nil
 		}
 		if ctx.Err() != nil {
-			return errClientGone
+			return true, errClientGone
 		}
-		return fmt.Errorf("upstream stream fault: %w", firstErr)
+		return true, fmt.Errorf("upstream stream fault: %w", firstErr)
 	}
 
-	buf := make([]byte, 16*1024)
 	for {
-		n, readErr := resp.Body.Read(buf)
-		if n > 0 {
-			if _, writeErr := w.Write(buf[:n]); writeErr != nil {
+		// Every wait is bounded, no total is: a stalled stream is terminated,
+		// a long one that keeps producing bytes is not.
+		next, readErr := readChunk(ctx, resp.Body, upstreamIdleTimeout)
+		if len(next) > 0 {
+			if _, writeErr := w.Write(next); writeErr != nil {
 				if ctx.Err() != nil {
-					return errClientGone
+					return true, errClientGone
 				}
-				return fmt.Errorf("client write failed: %w", writeErr)
+				return true, fmt.Errorf("client write failed: %w", writeErr)
 			}
 			if canFlush {
 				flusher.Flush()
@@ -388,14 +418,17 @@ func (s *Server) tryCandidate(
 		}
 		if readErr != nil {
 			if errors.Is(readErr, io.EOF) {
-				return nil
+				return true, nil
+			}
+			if errors.Is(readErr, errTTFTTimeout) {
+				readErr = errUpstreamStalled
 			}
 			// A cut-off upstream stream must never be recorded as success:
 			// the client received a partial body and the candidate is unhealthy.
 			if ctx.Err() != nil {
-				return errClientGone
+				return true, errClientGone
 			}
-			return fmt.Errorf("upstream stream fault: %w", readErr)
+			return true, fmt.Errorf("upstream stream fault: %w", readErr)
 		}
 	}
 }

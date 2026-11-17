@@ -182,7 +182,8 @@ PEAR_CONFIG_DIR=~/pear-profiles/work pear status
 上游在 `ttft_timeout_ms` 内没吐出首字节也算候选失败。请求体超过 32 MB
 直接返回 `413`，不再静默截断。pear 自己产生的错误统一是 JSON
 `{"type":"error","error":{"type":...,"message":...}}`，
-OpenAI 与 Anthropic 的 SDK 都能解析。
+OpenAI 与 Anthropic 的 SDK 都能解析。响应没有总超时:只要上游持续出字节,
+流就一直送到上游结束;上游静默十分钟才判定卡死并关闭,避免调用方无限等待。
 
 ## 🗺️ 路线图
 
