@@ -1,12 +1,17 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
+	"os/signal"
 	"strings"
+	"sync"
+	"syscall"
 	"text/tabwriter"
 	"time"
 
@@ -55,7 +60,8 @@ func printHelp() {
 Usage:
   pear serve [--port N]    Start the Pear Gateway HTTP/SSE server (default 127.0.0.1:3426)
   pear status              Show configured providers, OAuth accounts, and routing groups
-  pear quota [--json]      Show OAuth subscription windows, remaining % and reset times
+  pear quota [--json] [--url URL]
+                       Read live quota windows from the running gateway
   pear providers           List all upstream API & OAuth providers
   pear groups              List all smart routing groups and rules`)
 }
@@ -94,21 +100,53 @@ func runStatus() {
 	fmt.Println()
 }
 
-func runQuota(args []string) {
+func parseQuotaArgs(args []string) (jsonOut bool, url string, err error) {
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--json":
+			jsonOut = true
+		case "--url":
+			if i+1 >= len(args) {
+				return false, "", fmt.Errorf("--url needs an address")
+			}
+			i++
+			url = args[i]
+		default:
+			return false, "", fmt.Errorf("unknown argument %s", args[i])
+		}
+	}
+	return jsonOut, url, nil
+}
+
+// liveQuotas reads the running gateway. It does not build a pool from the file,
+// because that pool has never observed a response.
+func liveQuotas(override string) ([]oauth.AccountState, error) {
 	cfg, err := loadConfig()
 	if err != nil {
-		log.Fatalf("Error loading config: %v", err)
+		return nil, err
 	}
-	pool := oauth.NewPool(cfg.Accounts)
-	snaps := pool.Snapshot()
+	runtime, _ := config.ReadRuntimeAddr()
+	base := gateway.QuotaBaseURL(cfg.Server.Listen, runtime, override)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return gateway.FetchQuotas(ctx, base)
+}
 
-	for _, a := range args {
-		if a == "--json" {
-			enc := json.NewEncoder(os.Stdout)
-			enc.SetIndent("", "  ")
-			_ = enc.Encode(snaps)
-			return
-		}
+func runQuota(args []string) {
+	asJSON, override, err := parseQuotaArgs(args)
+	if err != nil {
+		log.Fatalf("pear quota: %v", err)
+	}
+	snaps, err := liveQuotas(override)
+	if err != nil {
+		log.Fatalf("pear quota: %v", err)
+	}
+
+	if asJSON {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		_ = enc.Encode(snaps)
+		return
 	}
 
 	fmt.Print(ui.Banner())
@@ -190,26 +228,55 @@ func runServe(args []string) {
 		}
 	}
 	pool := oauth.NewPool(cfg.Accounts)
+	var saveMu sync.Mutex
+	pool.SetTokenSaver(func(u oauth.TokenUpdate) {
+		saveMu.Lock()
+		defer saveMu.Unlock()
+		path := config.DefaultConfigPath()
+		if err := config.UpdateAccountTokens(path, u.ID, u.AccessToken, u.RefreshToken, u.ExpiresAt); err != nil {
+			log.Printf("[pear] saving refreshed token for %s: %v", u.ID, err)
+		}
+	})
+	refreshCtx, stopRefresh := context.WithCancel(context.Background())
+	defer stopRefresh()
+	pool.StartRefresher(refreshCtx)
+
 	engine := router.NewEngine(cfg, pool)
 	srv := gateway.NewServer(cfg, pool, engine)
+
+	// Header and idle waits are bounded; the response write is not, because a
+	// streaming completion is allowed to run as long as the upstream keeps
+	// sending bytes.
+	ln, err := net.Listen("tcp", cfg.Server.Listen)
+	if err != nil {
+		log.Fatalf("[Pear] listen %s: %v", cfg.Server.Listen, err)
+	}
+	if err := config.WriteRuntimeAddr(ln.Addr().String()); err != nil {
+		log.Printf("[pear] writing %s: %v", config.RuntimeAddrPath(), err)
+	}
+	defer os.Remove(config.RuntimeAddrPath())
 
 	fmt.Print(ui.Banner())
 	fmt.Printf("%s  %s\n\n",
 		ui.Green("▶ gateway listening on"),
-		ui.Accent("http://"+cfg.Server.Listen),
+		ui.Accent("http://"+ln.Addr().String()),
 	)
 	log.Printf("[Pear] Starting gateway on http://%s (%d providers, %d OAuth accounts)...",
-		cfg.Server.Listen, len(cfg.Providers), len(cfg.Accounts))
-	// Header and idle waits are bounded; the response write is not, because a
-	// streaming completion is allowed to run as long as the upstream keeps
-	// sending bytes.
+		ln.Addr().String(), len(cfg.Providers), len(cfg.Accounts))
+
 	httpSrv := &http.Server{
-		Addr:              cfg.Server.Listen,
 		Handler:           srv.Handler(),
 		ReadHeaderTimeout: 15 * time.Second,
 		IdleTimeout:       120 * time.Second,
 	}
-	if err := httpSrv.ListenAndServe(); err != nil {
+	go func() {
+		sig := make(chan os.Signal, 1)
+		signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
+		<-sig
+		stopRefresh()
+		httpSrv.Close()
+	}()
+	if err := httpSrv.Serve(ln); err != nil && err != http.ErrServerClosed {
 		log.Fatalf("[Pear] Server stopped: %v", err)
 	}
 }
