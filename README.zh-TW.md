@@ -1,126 +1,143 @@
 <!-- readme-theme: phosphor-archive / archetype-c / hero-svg -->
 <div align="center">
 
-<img src="assets/readme/hero.svg" alt="pear — 本地 AI 閘道器" width="860">
+<img src="assets/readme/hero.svg" alt="pear — 本地 AI 閘道" width="860">
 
-**一個二進位檔。一份設定。所有 AI 客戶端共用一個埠。**
+**裝一個二進位制，讓所有 AI 客戶端指向 `127.0.0.1:3426`。**
 
-[English](README.md) · **[簡體中文](README.zh-CN.md)** · [繁體中文](README.zh-TW.md)
+**[English](README.md)** · [簡體中文](README.zh-CN.md) · [繁體中文](README.zh-TW.md)
 
 [![Go](https://img.shields.io/badge/go-1.24%2B-00ADD8?logo=go&logoColor=white)](https://go.dev)
 [![deps](https://img.shields.io/badge/third--party%20deps-0-3FB950)](go.mod)
 [![license](https://img.shields.io/badge/license-MIT-3FB950)](LICENSE)
-[![os](https://img.shields.io/badge/windows%20%C2%B7%20linux%20%C2%B7%20macos-amd64%20%C2%B7%20arm64-8b949e)](#安裝)
+[![os](https://img.shields.io/badge/windows%20%C2%B7%20linux%20%C2%B7%20macos-amd64%20%C2%B7%20arm64-8b949e)](#install)
 
 </div>
 
-## 🍐 pear 是什麼
-
-pear 是跑在你自己機器上的閘道器。把 Claude Code、Codex、Cursor、各種 SDK 或者一句 `curl` 指向 `127.0.0.1:3426`，剩下的事交給 pear：這次請求由哪個上游帳號來服務。
-
-- **三種協議，一個埠** —— Anthropic Messages、OpenAI Chat Completions、OpenAI Responses 都落在同一個監聽上，出口時自動轉換。
-- **多個供應商，一個地址** —— `pear.json` 裡每個 provider 有自己的 base URL、金鑰和協議。group 把幾個 provider 打包成一個模型名對外。
-- **訂閱不會睡著** —— Codex、Copilot、Claude 這些 OAuth 帳號在後臺自動重新整理，掛了一夜的 CLI 第二天照樣能用。
-- **不用裝任何東西** —— 沒有資料庫、沒有內嵌瀏覽器、沒有外掛虛擬機器。一個可以直接複製的可執行檔案，加一份 `~/.pear/pear.json`。
-
-## ✨ 為什麼它這麼小
-
-- **一個檔案就是全部真相。** 所有平臺都用 `~/.pear/pear.json`。寫入走臨時檔案加 rename，崩潰也不會留下寫壞的設定。
-- **沒有鎖檔案。** 讀設定從不加鎖：啟動時讀一次，之後按需重讀。
-- **沒有外掛系統。** 路由、配額解析、協議轉換都是 `internal/` 裡的普通 Go 程式碼。
-- **傳輸層保持無聊。** HTTP/1.1、SSE 透傳、每個請求一個 goroutine。
-
-`go.mod` 只有一個依賴 `go.uber.org/goleak`，且僅測試程式碼引用 —— 二進位檔仍然只用標準庫的 `net/http`、`crypto/tls` 和 `encoding/json`。
-
 ## 📦 安裝
 
-四條路選一條，結果都是同一個可執行檔案。
+選一條路徑，裝完跑 `pear version`。約 1 分鐘。
 
-**1 · 用 mise 直接裝 GitHub Release** —— 不用 clone，不用 Go 工具鏈。
+**1 · 用 mise 從 GitHub Releases 裝** — 不用 clone，不用 Go 工具鏈。
 
 ```bash
-mise use -g "github:alexxhchen-nu/pear@0.1.2"
-pear version          # pear v0.1.2
+mise use -g "github:alexxhchen-nu/pear@0.1.5"
+pear version          # pear v0.1.5
 ```
 
-> mise 預設隱藏發佈不足 24 小時的版本（`minimum_release_age`）。要嘛像上面一樣鎖版本，要嘛等一天再用 `@latest`。
+> mise 會隱藏釋出不滿 24 小時的版本（`minimum_release_age`）。
+> 照上面顯式寫版本號，或明天再用 `@latest`。
 
-**2 · 用 mise 從原始碼建置** —— 現在就能用，不用等 release。
+**2 · 用 mise 從原始碼構建** — 任何 commit 都能用，不需要 tag。
 
 ```bash
 git clone https://github.com/alexxhchen-nu/pear.git
 cd pear
-mise install          # 按 mise.toml 裝 Go 工具鏈
-mise run build        # -> ./pear（Windows 上是 pear.exe）
+mise install          # 由 mise.toml 提供 Go 工具鏈
+mise run build        # -> ./pear（或 pear.exe）
 ```
 
-**3 · `go install`** —— 需要 Go 1.24+，以及已經打好的 tag。
+**3 · `go install`** — 需要 Go 1.24+ 和已打 tag 的釋出。
 
 ```bash
 go install github.com/alexxhchen-nu/pear/cmd/pear@latest
 ```
 
-**4 · 下載預編譯包** —— 去 [Releases](https://github.com/alexxhchen-nu/pear/releases) 取一個，先用 `checksums.txt` 驗證。
+**4 · 預編譯包** — 從
+[Releases](https://github.com/alexxhchen-nu/pear/releases) 下載，
+先拿 `checksums.txt` 核對。
 
 ```bash
 shasum -a 256 pear_darwin_arm64.tar.gz
 ```
 
-> 套件管理器（`scoop`、Homebrew、winget、AUR）還沒釋出。它們在下面的路線圖裡，這裡不寫假裝能用的命令。
+> `scoop`、Homebrew、winget、AUR 還沒釋出。它們只寫在下面的路線圖裡，
+> 這裡不假裝已經有了。
 
-## ⚡ 30 秒跑起來
+## ⚡ 啟動
 
-```bash
-pear status          # 看載入了什麼：providers、accounts、groups
-pear serve           # 前臺啟動，監聽 127.0.0.1:3426
-```
+四步，約 30 秒。
 
-把客戶端指過來 —— pear 同時提供兩種原生 base URL：
+1. `pear status` — 看載入了什麼：providers、accounts、groups。
+2. `pear serve` — 前景閘道，監聽 `127.0.0.1:3426`。
+3. 把客戶端指過來（兩種原生 base URL 都認）：
 
 ```bash
 export ANTHROPIC_BASE_URL=http://127.0.0.1:3426
 export OPENAI_BASE_URL=http://127.0.0.1:3426/v1
 ```
 
-確認它活著：
+4. 確認它活著：
 
 ```bash
 curl -s http://127.0.0.1:3426/health
 curl -s http://127.0.0.1:3426/v1/models
 ```
 
-`pear groups` 可以看清每個 group 會怎麼挑上游。
+`pear groups` 顯示每個 group 會怎麼挑上游。
 
-## 🔀 請求是怎麼被路由的
+## 🍐 pear 是什麼
 
-每個請求只做兩個決定，整個系統就這些。
+pear 跑在你自己機器上。Claude Code、Codex、Cursor、各種 SDK 或者一條
+`curl`，都只跟 `127.0.0.1:3426` 說話，由 pear 決定哪個上游賬號來服務。
+
+- **三種協議，一個埠** — Anthropic Messages、OpenAI Chat Completions、
+  OpenAI Responses 共用一個 listener，出口時自動翻譯。
+- **多個 provider，一個 URL** — `pear.json` 裡每個 provider 有自己的
+  base URL、key 和協議。group 把多個 provider 收在一個模型名後面。
+- **訂閱不會斷** — OAuth 賬號（Codex、Copilot、Claude）後臺續期，
+  CLI 掛一夜也還能用。
+- **不用裝別的東西** — 沒有資料庫，沒有 webview，沒有外掛 VM。
+  一個可執行檔案加 `~/.pear/pear.json`。
+
+## ✨ 為什麼它一直很小
+
+- **一個檔案，一個真相。** 所有平臺的配置都是 `~/.pear/pear.json`。
+  寫入走臨時檔案加 rename，崩潰不會留下寫了一半的配置。
+- **沒有鎖檔案。** 讀取方從不加鎖；啟動時讀一次，需要時再讀。
+- **沒有外掛系統。** 路由、額度解析、協議翻譯都是 `internal/` 裡的普通
+  Go 程式碼。
+- **傳輸層很無聊。** HTTP/1.1、SSE 直通、每請求一個 goroutine。
+
+`go.mod` 只有一個依賴 `go.uber.org/goleak`，且只有測試 import 它 ——
+二進位制仍然是 `net/http`、`crypto/tls` 和 `encoding/json`。
+
+## 🔀 請求怎麼路由
+
+每個請求做兩個決定，這就是全部。
 
 ```text
-in     /v1/messages · /v1/responses
-  │
-  ▼
-sniff  model · tokens · image · folder
-  │
-  ▼
-GATE 1 rule matched?
-  │      yes -> that rule's target list
-  │      no  -> the group strategy
-  ▼
-GATE 2 candidate healthy?
-  │      yes -> forward, stream SSE back
-  │      429/5xx -> next candidate
-  ▼
-sticky FNV-64a(session), 60 min
+inbound  /v1/messages · /v1/responses
+   │
+   ▼
+sniff    model · tokens · image · folder
+   │
+   ▼
+GATE 1   rule matched?
+   │        yes -> that rule's target list
+   │        no  -> the group strategy
+   ▼
+GATE 2   candidate healthy?
+   │        yes -> forward, stream SSE back
+   │        429/5xx -> next candidate
+   ▼
+sticky   FNV-64a(session) for 60 min
 ```
 
-- **關卡 1 —— 路由。** 規則只看請求的形狀：token 數、有沒有圖片、時間段、目錄，或者是不是壓縮/子代理呼叫。先命中先贏，都不命中就走 group 策略：`smart_pace`、`session_sticky`、`order`、`round_robin`。
-- **關卡 2 —— 健康。** 候選按順序試，直到有一個接單。遇到 `429` 或 `5xx` 就換下一個，失敗的候選在視窗期內跳過。
-- **粘性會話。** 會話 id 會雜湊到某個固定成員，同一段對話的連續幾輪落在同一個上游帳號上，提示詞快取一直是熱的。
-- **請求清洗。** Anthropic 請求切到非 Anthropic 上游時，`thinking.signature` 和 `cache_control` 會被剝掉 —— 否則上游直接 `400`。
+- **GATE 1 — 路由。** 規則匹配的是請求*形狀*：token 數、是否帶圖、
+  時間段、所在目錄，或者 compaction / sub-agent 呼叫。第一條命中就贏，
+  沒有命中就走 group 策略：`smart_pace`、`session_sticky`、`order`
+  或 `round_robin`。
+- **GATE 2 — 健康。** 候選按順序試，直到有一個接下請求。`429` 或 `5xx`
+  換下一個；失敗的在整個視窗內跳過。
+- **會話粘性。** session id 會雜湊到一個偏好的成員上，同一段對話的連續
+  回合打到同一個上游賬號，prompt cache 保持熱的。
+- **淨化。** Anthropic 請求轉移到非 Anthropic 上游時，
+  `thinking.signature` 和 `cache_control` 會被剝掉 —— 否則上游回 `400`。
 
-## ⚙️ 設定
+## ⚙️ 配置
 
-全部內容都在 `~/.pear/pear.json`，頂層只有四個鍵。
+全部在 `~/.pear/pear.json`，四個頂層鍵。
 
 ```json
 {
@@ -135,12 +152,18 @@ sticky FNV-64a(session), 60 min
 }
 ```
 
-- **`server`** —— `listen`、`default_target`、`compact_target`、`subagent_target`、`ttft_timeout_ms`、`sticky_ttl_min`。
-- **`providers[]`** —— `id`、`name`、`protocol`、`base_url`、`api_key`，可選 `models` 和 `off`。協議可選 `openai`、`anthropic`、`responses`、`oauth-codex`、`oauth-copilot`、`oauth-claude`。
-- **`accounts[]`** —— OAuth 訂閱：`agent`、`user`、`access_token`、`refresh_token`、`expires_at`，pear 負責輪換。
-- **`groups[]`** —— `id`、`strategy`、`members`，可選 `classifier` 和 `rules`。成員寫成 `provider/model`、另一個 group，或者任一家都能提供的裸模型名。
+- **`server`** — `listen`、`default_target`、`compact_target`、
+  `subagent_target`、`ttft_timeout_ms`、`sticky_ttl_min`。
+- **`providers[]`** — `id`、`name`、`protocol`、`base_url`、`api_key`，
+  可選 `models` 和 `off`。協議：`openai`、`anthropic`、`responses`、
+  `oauth-codex`、`oauth-copilot`、`oauth-claude`。
+- **`accounts[]`** — OAuth 訂閱：`agent`、`user`、`access_token`、
+  `refresh_token`、`expires_at`。pear 自動輪換。
+- **`groups[]`** — `id`、`strategy`、`members`，可選 `classifier` 和
+  `rules`。成員可以是 `provider/model`、另一個 group，或者任何 provider
+  都能供的裸模型名。
 
-規則描述的是請求本身，而不是提示詞內容：
+規則描述請求，不描述提示詞：
 
 ```json
 {
@@ -153,52 +176,59 @@ sticky FNV-64a(session), 60 min
 }
 ```
 
-想同時保留幾套設定，就把目錄指到別處：
+想並排放幾套配置，就指向別的目錄：
 
 ```bash
 PEAR_CONFIG_DIR=~/pear-profiles/work pear status
 ```
 
-## 🧪 命令列
+## 🧪 CLI
 
-- `pear serve [--port N]` —— 前臺執行閘道器。
-- `pear daemon` —— 同一件事，換成 init 系統習慣的名字。
-- `pear status` —— 設定路徑、數量統計、監聽地址。
-- `pear providers` —— provider 列表和各自協議。
-- `pear groups` —— group、策略、成員。
-- `pear quota` —— 從執行中的閘道器取配額快照。
-- `pear version` —— 建置時寫入的版本（本地建置是 `dev`）。
+- `pear serve [--port N]` / `pear daemon` — 同一個閘道，前景或在
+  init 系統期望的名字下。
+- `pear status` — 配置路徑、計數、監聽地址。
+- `pear providers` / `pear groups` — 協議、策略、成員。
+- `pear quota` — 向執行中的閘道取額度快照。
+- `pear version` — 構建標記（本地構建是 `dev`）。
 
 ## 🌐 HTTP 介面
 
-- `POST /v1/messages` —— Anthropic Messages 格式。
-- `POST /v1/chat/completions` —— OpenAI Chat Completions 格式。
-- `POST /v1/responses` —— OpenAI Responses 格式。
-- `GET /v1/models` —— 聚合後的模型列表。
-- `GET /v1/pear/quotas` —— 逐帳號配額快照。
-- `GET /health` —— 存活檢查。
-故障由閘道負責，不交給客戶端：`401` 先刷新一次權杖並對原候選重試一次，
-`403` 依 `Retry-After` 讓該帳號冷卻，`404`/`429`/`5xx` 切換到下一個候選，
-上游在 `ttft_timeout_ms` 內沒吐出首個位元組也算候選失敗。請求內容超過 32 MB
-直接回傳 `413`，不再靜默截斷。pear 自己產生的錯誤一律是 JSON
+- `POST /v1/messages` — Anthropic Messages。
+- `POST /v1/chat/completions` — OpenAI Chat Completions。
+- `POST /v1/responses` — OpenAI Responses。
+- `GET /v1/models` / `GET /v1/pear/quotas` — 模型列表、額度快照。
+- `GET /health` — 存活檢查。
+
+## 🩺 出事的時候
+
+失敗由閘道負責，不推給客戶端。
+
+1. `401` → 重新整理一次 token，再重試一次。
+2. `403` → 該賬號按 `Retry-After` 冷卻。
+3. `404` / `429` / `5xx` → 換下一個候選；失敗的在整個視窗內跳過。
+4. `ttft_timeout_ms` 內沒收到上游第一個位元組 → 算失敗候選，換下一個。
+5. 請求體超過 32 MB → `413`，絕不截斷。
+
+pear 自己產生的錯誤一律是 JSON：
 `{"type":"error","error":{"type":...,"message":...}}`，
-OpenAI 與 Anthropic 的 SDK 都能解析。回應沒有總逾時:只要上游持續出位元組,
-串流就一直送到上游結束;上游靜默十分鐘才判定卡死並關閉,避免呼叫方無限等待。
+OpenAI 和 Anthropic 的 SDK 都能解析。沒有總響應期限：一直在出位元組的流
+會跑到上游自己結束；靜默十分鐘的流會被關閉，呼叫方不會無限等。
 
 ## 🗺️ 路線圖
 
-- ✅ 單檔案二進位制、三種協議、四種策略。
-- ✅ OAuth 重新整理、會話粘性、rosetta 請求清洗。
-- ✅ 配額介面和 `pear quota`。
-- 🔜 第一個帶驗證和的正式 release。
+- ✅ 單二進位制、三種協議、四種策略。
+- ✅ OAuth 續期、會話粘性、rosetta 淨化。
+- ✅ 額度介面、`pear quota`、帶檢查碼的 tag 釋出。
 - 🔜 `scoop` · Homebrew · winget · AUR 清單。
-- 🔜 命令列裡的多套設定。
+- 🔜 CLI 裡的配置檔。
 - 🧪 用量統計與本地遙測。
 
 ## 🤝 參與
 
-有請求形狀或供應商相關的問題就開 issue。附上 `pear status` 和失敗時的 `/v1/models` 輸出，一次就能定位。提交 PR 請保持 `mise run check`（vet + build）透過，並說明你動了哪條路由分支。
+開 issue 時帶上請求形狀和涉及的 provider。附上 `pear status` 和失敗的
+`/v1/models` 輸出，一輪就能定位。提 PR：保持 `mise run check` 綠色
+（vet + build），並說明你動的是哪條路由分支。
 
-## 📄 許可
+## 📄 授權
 
 [MIT](LICENSE) © 2026 alexxhchen
