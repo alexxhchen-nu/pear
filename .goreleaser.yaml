@@ -15,6 +15,9 @@ builds:
     flags:
       - -trimpath
     ldflags:
+      # Single source of truth for the stamp. `mise run build` passes
+      # PEAR_VERSION (git describe, leading v stripped) through the snapshot
+      # template below; a real release leaves it unset and uses the tag.
       - -s -w -X main.version={{ .Version }}
     goos:
       - windows
@@ -24,6 +27,10 @@ builds:
       - amd64
       - arm64
     mod_timestamp: "{{ .CommitTimestamp }}"
+
+snapshot:
+  # Empty PEAR_VERSION keeps GoReleaser's usual snapshot name for CI.
+  version_template: '{{ if .Env.PEAR_VERSION }}{{ .Env.PEAR_VERSION }}{{ else }}{{ .Version }}-SNAPSHOT-{{ .ShortCommit }}{{ end }}'
 
 archives:
   - id: pear

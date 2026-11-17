@@ -17,11 +17,10 @@ import (
 	"github.com/alexxhchen-nu/pear/internal/ui"
 )
 
-// version is stamped at build time with
-//
-//	go build -ldflags "-X main.version=$(git describe --tags --always)"
-//
-// Local `go build` / `go run` keep "dev"; release binaries carry the tag.
+// version is stamped at build time via -X main.version=...
+// (.goreleaser.yaml is the only copy of those flags). Release binaries
+// carry the tag; `mise run build` carries git describe. A plain
+// `go build` / `go run` keeps "dev".
 var version = "dev"
 
 func main() {
