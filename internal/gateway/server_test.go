@@ -21,7 +21,7 @@ func fixture(t *testing.T, upstream string) (*Server, router.TargetCandidate) {
 	cfg := &config.Config{
 		Server: config.ServerConfig{Listen: "127.0.0.1:0"},
 		Providers: []config.ProviderConfig{{
-			ID: "fake", Protocol: "openai", BaseURL: upstream, Models: []string{"m"},
+			ID: "fake", Protocol: "anthropic", BaseURL: upstream, Models: []string{"m"},
 		}},
 	}
 	pool := oauth.NewPool(nil)
@@ -85,7 +85,7 @@ func fixtureAccount(t *testing.T, upstream string) (*Server, router.TargetCandid
 	acct := config.AccountConfig{ID: "a1", Agent: "claude-code", AccessToken: "tok-1", Enabled: true}
 	cfg := &config.Config{
 		Server:    config.ServerConfig{Listen: "127.0.0.1:0"},
-		Providers: []config.ProviderConfig{{ID: "fake", Protocol: "openai", BaseURL: upstream, Models: []string{"m"}}},
+		Providers: []config.ProviderConfig{{ID: "fake", Protocol: "anthropic", BaseURL: upstream, Models: []string{"m"}}},
 		Accounts:  []config.AccountConfig{acct},
 	}
 	pool := oauth.NewPool(cfg.Accounts)

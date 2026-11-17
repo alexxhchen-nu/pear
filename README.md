@@ -12,7 +12,7 @@
 
 pear is a local gateway for model APIs. The published binary is one static executable (`CGO_ENABLED=0`). Point Claude Code, Codex, Cursor, or any other OpenAI or Anthropic client at `127.0.0.1:3426`. pear reads `~/.pear/pear.json` and forwards each request to an upstream you listed there.
 
-Use it when you already have API keys, or Codex, GitHub Copilot, or Claude subscription tokens, and you want one localhost address and an ordered failover list. The client and the upstream speak the same HTTP API. pear rewrites `model` to the chosen upstream model. When that protocol is not `anthropic` or `oauth-claude`, it also drops Anthropic thinking signatures and `cache_control`. The gateway itself is standard-library Go. The only direct module requirement, `go.uber.org/goleak`, is imported by tests.
+Use it when you already have API keys, or Codex, GitHub Copilot, or Claude subscription tokens, and you want one localhost address and an ordered failover list. pear rewrites `model` to the chosen upstream model. When the upstream protocol is not `anthropic` or `oauth-claude`, it also drops Anthropic thinking signatures and `cache_control`. A different protocol is translated only for a non-streaming plain-text chat. The gateway itself is standard-library Go. The only direct module requirement, `go.uber.org/goleak`, is imported by tests.
 
 ## Install
 
@@ -119,7 +119,9 @@ If `pear.json` is missing, pear uses listen `127.0.0.1:3426`, default target `gr
 
 ## Protocols
 
-The listener accepts three POST paths and forwards the path. It does not rewrite Chat Completions JSON into Messages, or the reverse.
+The listener accepts three POST paths. When the client path and the upstream wire format are the same, pear forwards that path. When they differ, pear translates a non-streaming plain-text conversation: system, user, and assistant strings, plus `max_tokens` and `temperature`. The translated request goes to the upstream path, not the client path. Streaming, tools, and images across protocols return `translation_unsupported` and are not forwarded.
+
+Wire format: `openai` and `oauth-copilot` are Chat Completions. `anthropic` and `oauth-claude` are Messages. `responses` and `oauth-codex` are Responses.
 
 | Path | Client API |
 | --- | --- |
@@ -130,7 +132,7 @@ The listener accepts three POST paths and forwards the path. It does not rewrite
 `protocol` chooses credentials and cleanup:
 
 - `openai` and `responses` send `Authorization: Bearer` with `api_key`.
-- `anthropic` sends `x-api-key` and `Authorization: Bearer`. If the client omitted `Anthropic-Version`, pear sets `2023-06-01`.
+- `anthropic` sends `x-api-key` and `Authorization: Bearer`. If the client omitted `Anthropic-Version`, pear sets `2023-06-01`. `oauth-claude` gets that same version header.
 - `oauth-codex`, `oauth-copilot`, and `oauth-claude` send a bearer token from an account. See [OAuth accounts](#oauth-accounts).
 
 When `base_url` ends in `/v1` and the request path starts with `/v1/`, pear joins them without a second `/v1`. `https://api.openai.com/v1` and `/v1/chat/completions` become `https://api.openai.com/v1/chat/completions`.
@@ -141,7 +143,14 @@ When `base_url` ends in `/v1` and the request path starts with `/v1/`, pear join
 
 The requested `model` selects the target. `group/<id>` runs that group. `provider/model` selects that provider even when `model` is absent from `models`. A bare name such as `gpt-4o-mini` uses the first enabled provider whose `models` list contains it.
 
-In a group, the first matching rule replaces `members` with its `use` list. Otherwise pear walks `members` in written order. Entries may be `provider/model`, `group/<id>` (nested up to four levels), or a bare model name. `pear groups` prints `strategy`. The router ignores that field.
+In a group, the first matching rule replaces `members` with its `use` list. Otherwise `strategy` orders `members`:
+
+- `order`, and an empty or unknown strategy: written order.
+- `round_robin`: each new session starts at the next member, then the rest.
+- `session_sticky`: the session hash picks the starting member. The same session keeps that start.
+- `smart_pace`: a member with an OAuth account is ordered by remaining quota. More remaining, and a sooner reset, comes first. A member with no account keeps its place among equal scores.
+
+Entries may be `provider/model`, `group/<id>` (nested up to four levels), or a bare model name.
 
 After a successful response, pear hashes the first 768 bytes of the body with FNV-64a and keeps the winning `provider/model` for `sticky_ttl_min` minutes. Default is 60, and `0` also means 60. A later request with the same prefix moves that target to the front when it is still a candidate.
 
@@ -205,13 +214,16 @@ Use protocol `oauth-codex`, `oauth-copilot`, or `oauth-claude`, and leave `api_k
 
 Set `base_url` to that product's API. `expires_at` is Unix seconds. An agent of `plugin:github-copilot` matches a provider id of `copilot` or `github-copilot`.
 
-- For agent `codex`, pear posts `refresh_token` to `https://auth.openai.com/oauth/token` when the access token is inside 120 seconds of `expires_at`, and again after a 401. The new access token stays in process memory. pear does not write it back to `pear.json`.
-- When `agent` contains `github-copilot`, pear exchanges `access_token` at `https://api.github.com/copilot_internal/v2/token` and caches the returned bearer.
-- `oauth-claude` and every other agent send `access_token`. This version has no refresh request for them.
+While `pear serve` is running, it refreshes tokens about two minutes before they expire, and again after a 401. A failed refresh keeps a token that is still valid and tries again on the next pass. An expired token whose refresh fails is not sent. `expires_at` is Unix seconds. A millisecond value is accepted and stored back as seconds.
 
-A 401 on an account clears the cached bearer and retries that account once. Codex refreshes, Copilot exchanges, and other agents send the same access token again.
+- Agent `codex` (an optional `plugin:` prefix is ignored) posts `refresh_token` to `https://auth.openai.com/oauth/token`. A new access token, and a new refresh token when the server sends one, are written back to `pear.json`.
+- An agent that is `claude` or starts with `claude` posts to `https://platform.claude.com/v1/oauth/token`. If that host is missing or unreachable, pear tries `https://console.anthropic.com/v1/oauth/token`. Rotated tokens are written back to `pear.json`.
+- An agent containing `github-copilot` exchanges `access_token` at `https://api.github.com/copilot_internal/v2/token`. The short-lived bearer stays in memory and is not written to `pear.json`.
+- Any other agent sends `access_token` and is not refreshed.
 
-Among matching accounts, a higher remaining quota scores better, and a sooner reset scores better. Accounts in cooldown are skipped. Before any window is recorded, every match scores the same. Windows are updated only inside `pear serve`, and only from Anthropic's unified 5-hour and 7-day utilization headers. `GET /v1/pear/quotas` returns that process's snapshot, with access and refresh tokens masked and `extra` removed. `pear quota` reads the file into a fresh pool, so its windows are empty. It does not call the running gateway.
+A 401 on an account clears the cached bearer and retries that account once. Codex and Claude refresh, Copilot exchanges, and other agents send the same access token again.
+
+Among matching accounts, a higher remaining quota scores better, and a sooner reset scores better. Accounts in cooldown are skipped. Before any window is recorded, every match scores the same. Windows are updated only inside `pear serve`, and only from Anthropic's unified 5-hour and 7-day utilization headers. `GET /v1/pear/quotas` returns that process's snapshot, with access and refresh tokens masked and `extra` removed. `pear quota` reads that endpoint on the running gateway. It uses `gateway.addr` in the config directory when `pear serve` has written it, otherwise `server.listen`. `--url` overrides both. The command fails if nothing is listening. `pear serve` removes `gateway.addr` when the process exits.
 
 A 403 cools that account down for `Retry-After` seconds, or 15 minutes. A 429 or 529 cools it down for `Retry-After` seconds, or 30 seconds.
 
@@ -233,10 +245,10 @@ Omitted `server` fields keep the defaults from the missing-file case above. `pea
 | `providers[].insecure_tls` | Skip TLS verification. |
 | `accounts[].id`, `agent`, `user`, `enabled` | `enabled` must be true or the account is skipped. |
 | `accounts[].plan` | Printed by `pear quota`. Routing does not read it. |
-| `accounts[].access_token`, `refresh_token`, `expires_at` | Credentials. `expires_at` is Unix seconds. |
+| `accounts[].access_token`, `refresh_token`, `expires_at` | Credentials. `expires_at` is Unix seconds, or milliseconds. |
 | `accounts[].extra` | Kept in the file. Dropped from quota snapshots. |
 | `groups[].id`, `name`, `members`, `rules` | The group the router actually walks. |
-| `groups[].strategy` | Printed by `pear groups`. The router ignores it. |
+| `groups[].strategy` | `order`, `round_robin`, `session_sticky`, or `smart_pace`. Empty or unknown means `order`. |
 | `groups[].classifier` | Accepted and ignored. |
 
 ## CLI
@@ -247,7 +259,8 @@ pear daemon [--port N]   Same process as serve
 pear status              Config path, listen address, counts
 pear providers           id, protocol, base URL, model count, on or off
 pear groups              Members in order, then each rule
-pear quota [--json]      Accounts from the file. No live windows
+pear quota [--json] [--url URL]
+                         Live windows from the running gateway
 pear version             Release tag, or dev
 ```
 

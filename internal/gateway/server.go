@@ -201,13 +201,17 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 		log.Printf("[pear-failover] candidate #%d (%s/%s) failed: %v", idx+1, cand.Provider.ID, cand.Model, err)
 	}
 
+	if errors.Is(lastErr, rosetta.ErrUnsupported) {
+		writeError(w, http.StatusBadRequest, "translation_unsupported", lastErr.Error())
+		return
+	}
 	writeError(w, http.StatusBadGateway, "upstream_error",
 		fmt.Sprintf("pear gateway exhausted all %d candidates; last error: %v", len(candidates), lastErr))
 }
 
 // doUpstream builds and executes one upstream attempt for a candidate.
-func (s *Server) doUpstream(ctx context.Context, inReq *http.Request, cand router.TargetCandidate, body []byte) (*http.Response, error) {
-	upstreamURL := buildUpstreamURL(cand.Provider.BaseURL, inReq.URL.Path)
+func (s *Server) doUpstream(ctx context.Context, inReq *http.Request, cand router.TargetCandidate, path string, body []byte) (*http.Response, error) {
+	upstreamURL := buildUpstreamURL(cand.Provider.BaseURL, path)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, upstreamURL, bytes.NewReader(body))
 	if err != nil {
@@ -224,7 +228,7 @@ func (s *Server) doUpstream(ctx context.Context, inReq *http.Request, cand route
 	}
 	if ver := inReq.Header.Get("Anthropic-Version"); ver != "" {
 		req.Header.Set("Anthropic-Version", ver)
-	} else if cand.Provider.Protocol == "anthropic" {
+	} else if cand.Provider.Protocol == "anthropic" || cand.Provider.Protocol == "oauth-claude" {
 		req.Header.Set("Anthropic-Version", "2023-06-01")
 	}
 
@@ -318,9 +322,23 @@ func (s *Server) tryCandidate(
 	feat router.RequestFeatures,
 	cand router.TargetCandidate,
 ) (bool, error) {
-	rewritten := rosetta.SanitizeAndRewriteRequest(rawBody, cand.Model, cand.Provider.Protocol)
+	inbound := rosetta.ProtocolFromPath(inReq.URL.Path)
+	upstreamProto := rosetta.WireProtocol(cand.Provider.Protocol)
+	cross := inbound != "" && upstreamProto != "" && inbound != upstreamProto
+	path := inReq.URL.Path
+	var rewritten []byte
+	if cross {
+		converted, convErr := rosetta.TranslateRequest(rawBody, cand.Model, inbound, upstreamProto)
+		if convErr != nil {
+			return false, convErr
+		}
+		rewritten = converted
+		path = rosetta.PathFor(upstreamProto)
+	} else {
+		rewritten = rosetta.SanitizeAndRewriteRequest(rawBody, cand.Model, cand.Provider.Protocol)
+	}
 
-	resp, err := s.doUpstream(ctx, inReq, cand, rewritten)
+	resp, err := s.doUpstream(ctx, inReq, cand, path, rewritten)
 	if err != nil {
 		return false, err
 	}
@@ -330,7 +348,7 @@ func (s *Server) tryCandidate(
 	if resp.StatusCode == http.StatusUnauthorized && cand.Account != nil {
 		drainAndClose(resp.Body)
 		s.pool.ForceRefresh(cand.Account)
-		retry, retryErr := s.doUpstream(ctx, inReq, cand, rewritten)
+		retry, retryErr := s.doUpstream(ctx, inReq, cand, path, rewritten)
 		if retryErr != nil {
 			return false, retryErr
 		}
@@ -360,6 +378,9 @@ func (s *Server) tryCandidate(
 	ttft := time.Duration(s.cfg.Server.TTFTTimeoutMS) * time.Millisecond
 	if ttft <= 0 {
 		ttft = 12 * time.Second
+	}
+	if cross {
+		return s.writeTranslated(ctx, w, resp, cand, upstreamProto, inbound, ttft)
 	}
 	first, firstErr := readChunk(ctx, resp.Body, ttft)
 	if firstErr != nil && !errors.Is(firstErr, io.EOF) {
@@ -429,6 +450,59 @@ func (s *Server) tryCandidate(
 				return true, errClientGone
 			}
 			return true, fmt.Errorf("upstream stream fault: %w", readErr)
+		}
+	}
+}
+
+// writeTranslated buffers a non-streaming upstream body and rewrites it into
+// the client protocol before any byte is committed. A translation failure
+// can still fail over.
+func (s *Server) writeTranslated(
+	ctx context.Context,
+	w http.ResponseWriter,
+	resp *http.Response,
+	cand router.TargetCandidate,
+	from, to string,
+	ttft time.Duration,
+) (bool, error) {
+	buf, err := readAllLimited(ctx, resp.Body, ttft, upstreamIdleTimeout, maxRequestBodyBytes)
+	if err != nil {
+		if ctx.Err() != nil {
+			return false, errClientGone
+		}
+		return false, fmt.Errorf("upstream response: %w", err)
+	}
+	out, err := rosetta.TranslateResponse(buf, from, to)
+	if err != nil {
+		return false, err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("X-Pear-Routed-Provider", cand.Provider.ID)
+	w.Header().Set("X-Pear-Routed-Model", cand.Model)
+	w.WriteHeader(resp.StatusCode)
+	if _, err := w.Write(out); err != nil {
+		return true, fmt.Errorf("client write failed: %w", err)
+	}
+	return true, nil
+}
+
+func readAllLimited(ctx context.Context, body io.Reader, first, next time.Duration, max int) ([]byte, error) {
+	var buf bytes.Buffer
+	timeout := first
+	for {
+		chunk, err := readChunk(ctx, body, timeout)
+		timeout = next
+		if len(chunk) > 0 {
+			if buf.Len()+len(chunk) > max {
+				return nil, fmt.Errorf("upstream response exceeds %d bytes", max)
+			}
+			buf.Write(chunk)
+		}
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				return buf.Bytes(), nil
+			}
+			return nil, err
 		}
 	}
 }

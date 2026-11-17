@@ -12,7 +12,7 @@
 
 pear 是在你這台電腦上跑的模型 API 閘道。發行的檔案是一支靜態執行檔（`CGO_ENABLED=0`）。把 Claude Code、Codex、Cursor，或其他 OpenAI、Anthropic 用戶端指到 `127.0.0.1:3426`。pear 讀取 `~/.pear/pear.json`，再把每個請求轉到你寫在裡面的上游。
 
-適合已經有 API 金鑰，或是 Codex、GitHub Copilot、Claude 訂閱 token 的人。你要的是一個本機位址，加上一份排好順序的失敗切換名單。用戶端和上游講同一種 HTTP API。pear 會把 `model` 改成選中的上游模型。目標協定不是 `anthropic` 或 `oauth-claude` 時，也會拿掉 Anthropic 的 thinking 簽章和 `cache_control`。閘道程式用的是 Go 標準庫。`go.mod` 裡唯一的直接依賴 `go.uber.org/goleak` 只有測試會引用。
+適合已經有 API 金鑰，或是 Codex、GitHub Copilot、Claude 訂閱 token 的人。你要的是一個本機位址，加上一份排好順序的失敗切換名單。pear 會把 `model` 改成選中的上游模型。目標協定不是 `anthropic` 或 `oauth-claude` 時，也會拿掉 Anthropic 的 thinking 簽章和 `cache_control`。協定不同時，只翻譯非串流的純文字對話。閘道程式用的是 Go 標準庫。`go.mod` 裡唯一的直接依賴 `go.uber.org/goleak` 只有測試會引用。
 
 ## 安裝
 
@@ -119,7 +119,9 @@ PEAR_CONFIG_DIR=~/pear-profiles/work pear status
 
 ## 協定
 
-監聽端接受三種 POST 路徑，並照原路徑轉送。它不會把 Chat Completions 的 JSON 改寫成 Messages，也不會反過來。
+監聽端接受三種 POST 路徑。用戶端路徑和上游線路格式相同時，pear 照該路徑轉送。不同時，只翻譯非串流的純文字對話：system、user、assistant 字串，以及 `max_tokens` 和 `temperature`。譯過的請求發到上游自己的路徑，不是用戶端路徑。跨協定的串流、工具和圖片回傳 `translation_unsupported`，不會轉送。
+
+線路格式：`openai` 和 `oauth-copilot` 是 Chat Completions。`anthropic` 和 `oauth-claude` 是 Messages。`responses` 和 `oauth-codex` 是 Responses。
 
 | 路徑 | 用戶端 API |
 | --- | --- |
@@ -130,7 +132,7 @@ PEAR_CONFIG_DIR=~/pear-profiles/work pear status
 `protocol` 決定憑證和清理方式：
 
 - `openai` 和 `responses` 用 `api_key` 送出 `Authorization: Bearer`。
-- `anthropic` 同時送出 `x-api-key` 和 `Authorization: Bearer`。用戶端沒帶 `Anthropic-Version` 時，pear 設成 `2023-06-01`。
+- `anthropic` 同時送出 `x-api-key` 和 `Authorization: Bearer`。用戶端沒帶 `Anthropic-Version` 時，pear 設成 `2023-06-01`。`oauth-claude` 也會帶上這個版本標頭。
 - `oauth-codex`、`oauth-copilot`、`oauth-claude` 使用帳號裡的 bearer token。見 [OAuth 帳號](#oauth-帳號)。
 
 `base_url` 以 `/v1` 結尾，而且請求路徑以 `/v1/` 開頭時，接起來不會多出一個 `/v1`。`https://api.openai.com/v1` 加上 `/v1/chat/completions` 會變成 `https://api.openai.com/v1/chat/completions`。
@@ -141,7 +143,14 @@ PEAR_CONFIG_DIR=~/pear-profiles/work pear status
 
 請求裡的 `model` 決定目標。`group/<id>` 進入該組。`provider/model` 選中該 provider，就算 `models` 裡沒有這個模型也一樣。`gpt-4o-mini` 這種裸名，用第一個啟用中且 `models` 含有它的 provider。
 
-組內依序看 `rules`。第一條命中的規則用它的 `use` 換掉 `members`。都沒命中，就照寫下的順序走 `members`。每一項可以是 `provider/model`、`group/<id>`（最多巢狀四層），或裸模型名。`pear groups` 會印出 `strategy`。路由器不讀這個欄位。
+組內依序看 `rules`。第一條命中的規則用它的 `use` 換掉 `members`。都沒命中時，由 `strategy` 排列 `members`：
+
+- `order`，以及空的或未知的策略：照寫好的順序。
+- `round_robin`：每個新 session 從下一個成員開始，再走剩下的。
+- `session_sticky`：用 session 雜湊選起始成員。同一個 session 保持這個起點。
+- `smart_pace`：帶 OAuth 帳號的成員按剩餘額度排序。剩餘越多、重設越近，越靠前。沒有帳號的成員在分數相同時留在原位。
+
+每一項可以是 `provider/model`、`group/<id>`（最多巢狀四層），或裸模型名。
 
 一次成功的回應之後，pear 用 FNV-64a 對本文前 768 個位元組做雜湊，把勝出的 `provider/model` 記住 `sticky_ttl_min` 分鐘。預設 60，寫成 `0` 也是 60。之後前綴相同的請求，如果這個目標還在候選裡，就把它移到最前面。
 
@@ -205,13 +214,16 @@ PEAR_CONFIG_DIR=~/pear-profiles/work pear status
 
 `base_url` 填該產品自己的 API。`expires_at` 是 Unix 秒。`agent` 為 `plugin:github-copilot` 時，可以對上 id 為 `copilot` 或 `github-copilot` 的 provider。
 
-- `agent` 正好是 `codex` 時，access token 距離 `expires_at` 不到 120 秒，或上游回 401，pear 會把 `refresh_token` POST 到 `https://auth.openai.com/oauth/token`。新的 access token 只留在這個行程的記憶體裡，不會寫回 `pear.json`。
-- `agent` 含有 `github-copilot` 時，pear 用 `access_token` 向 `https://api.github.com/copilot_internal/v2/token` 換 bearer，並快取結果。
-- `oauth-claude` 和其他 agent 直接送出 `access_token`。這一版沒有它們的重新整理請求。
+`pear serve` 執行時，會在到期前大約兩分鐘續期，401 之後也會再續一次。續期失敗時，只要目前 token 還沒過期就繼續用，下一輪再試。已經過期且續期失敗的 token 不會送出去。`expires_at` 是 Unix 秒。毫秒值也能讀，寫回檔案時改成秒。
 
-帳號遇到 401 時，pear 清掉快取的 bearer，並對該帳號重試一次。Codex 會重新整理，Copilot 會交換，其他 agent 會再送一次原來的 access token。
+- `agent` 為 `codex`（可帶 `plugin:` 前綴）時，把 `refresh_token` POST 到 `https://auth.openai.com/oauth/token`。新的 access token，以及伺服器回傳的新 refresh token，會寫回 `pear.json`。
+- `agent` 為 `claude` 或以 `claude` 開頭時，POST 到 `https://platform.claude.com/v1/oauth/token`。這個主機不存在或連不上時，再試 `https://console.anthropic.com/v1/oauth/token`。輪換後的 token 寫回 `pear.json`。
+- `agent` 含有 `github-copilot` 時，用 `access_token` 向 `https://api.github.com/copilot_internal/v2/token` 換 bearer。這張短期 bearer 只留在記憶體裡，不寫入 `pear.json`。
+- 其他 agent 直接送出 `access_token`，不會續期。
 
-多個帳號都對上時，剩餘額度較高的分數較高，重設較早的分數也較高。冷卻中的帳號會被跳過。還沒有任何額度區間時，對上的帳號分數相同。區間只在 `pear serve` 行程裡更新，而且只認 Anthropic 統一的 5 小時和 7 天使用率標頭。`GET /v1/pear/quotas` 回傳這個行程的快照，access token 和 refresh token 會被遮住，`extra` 會被拿掉。`pear quota` 從檔案建一個新的池，所以區間是空的。它不會去問正在跑的閘道。
+帳號遇到 401 時，pear 清掉快取的 bearer，並對該帳號重試一次。Codex 和 Claude 會重新整理，Copilot 會交換，其他 agent 會再送一次原來的 access token。
+
+多個帳號都對上時，剩餘額度較高的分數較高，重設較早的分數也較高。冷卻中的帳號會被跳過。還沒有任何額度區間時，對上的帳號分數相同。區間只在 `pear serve` 行程裡更新，而且只認 Anthropic 統一的 5 小時和 7 天使用率標頭。`GET /v1/pear/quotas` 回傳這個行程的快照，access token 和 refresh token 會被遮住，`extra` 會被拿掉。`pear quota` 讀執行中閘道的這個介面。`pear serve` 寫過設定目錄裡的 `gateway.addr` 時用那個位址，否則用 `server.listen`。`--url` 覆蓋兩者。沒有行程在聽就失敗。`pear serve` 結束時刪掉 `gateway.addr`。
 
 403 會依 `Retry-After` 的秒數冷卻該帳號，沒有這個標頭就冷卻 15 分鐘。429 或 529 依 `Retry-After` 冷卻，沒有就冷卻 30 秒。
 
@@ -233,10 +245,10 @@ PEAR_CONFIG_DIR=~/pear-profiles/work pear status
 | `providers[].insecure_tls` | 略過 TLS 檢查。 |
 | `accounts[].id`、`agent`、`user`、`enabled` | `enabled` 必須為 true，否則跳過。 |
 | `accounts[].plan` | `pear quota` 會印出。路由不讀它。 |
-| `accounts[].access_token`、`refresh_token`、`expires_at` | 憑證。`expires_at` 是 Unix 秒。 |
+| `accounts[].access_token`、`refresh_token`、`expires_at` | 憑證。`expires_at` 是 Unix 秒，或毫秒。 |
 | `accounts[].extra` | 留在檔案裡。快照裡會拿掉。 |
 | `groups[].id`、`name`、`members`、`rules` | 路由器真正會走的組。 |
-| `groups[].strategy` | `pear groups` 會印出。路由器略過它。 |
+| `groups[].strategy` | `order`、`round_robin`、`session_sticky` 或 `smart_pace`。空的或未知的等於 `order`。 |
 | `groups[].classifier` | 接受這個欄位，然後略過。 |
 
 ## 命令
@@ -247,7 +259,8 @@ pear daemon [--port N]   與 serve 相同的行程
 pear status              設定路徑、監聽位址、數量
 pear providers           id、協定、base URL、模型個數、開或關
 pear groups              依序印出成員，然後是每條規則
-pear quota [--json]      檔案裡的帳號。沒有即時區間
+pear quota [--json] [--url URL]
+                         執行中閘道的即時區間
 pear version             發行標籤，或 dev
 ```
 

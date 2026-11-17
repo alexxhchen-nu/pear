@@ -113,6 +113,67 @@ func Load(path string) (*Config, error) {
 	return cfg, nil
 }
 
+// RuntimeAddrPath is the listen address pear serve last bound, one line,
+// next to pear.json. pear quota prefers it over server.listen.
+func RuntimeAddrPath() string {
+	return filepath.Join(DefaultConfigDir(), "gateway.addr")
+}
+
+func WriteRuntimeAddr(addr string) error {
+	path := RuntimeAddrPath()
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		return err
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, []byte(addr+"\n"), 0600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
+}
+
+// ReadRuntimeAddr reports the address file when it exists and is non-empty.
+func ReadRuntimeAddr() (string, bool) {
+	data, err := os.ReadFile(RuntimeAddrPath())
+	if err != nil {
+		return "", false
+	}
+	addr := strings.TrimSpace(string(data))
+	if addr == "" {
+		return "", false
+	}
+	return addr, true
+}
+
+// UpdateAccountTokens patches one account and rewrites pear.json.
+// An empty refresh token keeps the token already in the file.
+func UpdateAccountTokens(path, id, access, refresh string, expiresAt int64) error {
+	cfg, err := Load(path)
+	if err != nil {
+		return err
+	}
+	found := false
+	for i := range cfg.Accounts {
+		if cfg.Accounts[i].ID != id {
+			continue
+		}
+		found = true
+		if access != "" {
+			cfg.Accounts[i].AccessToken = access
+		}
+		if refresh != "" {
+			cfg.Accounts[i].RefreshToken = refresh
+		}
+		if expiresAt > 0 {
+			cfg.Accounts[i].ExpiresAt = expiresAt
+		}
+		break
+	}
+	if !found {
+		return os.ErrNotExist
+	}
+	return Save(path, cfg)
+}
+
 func Save(path string, cfg *Config) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return err

@@ -2,9 +2,11 @@ package oauth
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -33,7 +35,17 @@ type AccountState struct {
 
 	// forceRefresh makes the next ResolveBearerToken ignore the cache. Set by
 	// ForceRefresh after an upstream 401, cleared once a token is fetched.
-	forceRefresh bool
+	forceRefresh   bool
+	lastRefreshErr string
+}
+
+// TokenUpdate is a rotated OAuth credential the pool wants written back.
+// An empty RefreshToken means the previous refresh token is still current.
+type TokenUpdate struct {
+	ID           string
+	AccessToken  string
+	RefreshToken string
+	ExpiresAt    int64
 }
 
 // Pool manages all OAuth subscription accounts and passive quota windows.
@@ -41,7 +53,23 @@ type Pool struct {
 	mu       sync.RWMutex
 	accounts map[string]*AccountState
 	client   *http.Client
+	onSave   func(TokenUpdate)
 }
+
+// refreshLead is how early a token is renewed, both in the background and on
+// the request path. Two minutes matches the previous inline Codex check.
+const refreshLead = 2 * time.Minute
+
+const refreshEvery = 30 * time.Second
+
+const (
+	codexTokenURL        = "https://auth.openai.com/oauth/token"
+	codexClientID        = "app_EMoamEEZ73f0CkXaXp7hrann"
+	claudeTokenURL       = "https://platform.claude.com/v1/oauth/token"
+	claudeTokenURLLegacy = "https://console.anthropic.com/v1/oauth/token"
+	claudeClientID       = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
+	copilotTokenURL      = "https://api.github.com/copilot_internal/v2/token"
+)
 
 func NewPool(accounts []config.AccountConfig) *Pool {
 	p := &Pool{
@@ -104,6 +132,42 @@ func (p *Pool) SelectBestAccount(agentPrefix string) (*AccountState, error) {
 	return best, nil
 }
 
+// BestPace is the smart-pace score of the best account whose agent contains
+// providerID. The second result is false when no enabled account matches.
+// Every matching account being in cooldown still returns true, with a score
+// that sorts that member last.
+func (p *Pool) BestPace(providerID string, now time.Time) (float64, bool) {
+	if providerID == "" {
+		return 0, false
+	}
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+
+	best := -1e9
+	selectable := false
+	matched := false
+	for _, st := range p.accounts {
+		if !st.Account.Enabled || !strings.Contains(st.Account.Agent, providerID) {
+			continue
+		}
+		matched = true
+		if now.Before(st.CooldownTil) {
+			continue
+		}
+		selectable = true
+		if score := computePaceScore(st, now); score > best {
+			best = score
+		}
+	}
+	if selectable {
+		return best, true
+	}
+	if matched {
+		return -1000, true
+	}
+	return 0, false
+}
+
 // computePaceScore prioritizes accounts with ample remaining quota whose reset window is soonest.
 func computePaceScore(st *AccountState, now time.Time) float64 {
 	if len(st.Windows) == 0 {
@@ -130,103 +194,368 @@ func computePaceScore(st *AccountState, now time.Time) float64 {
 	return minRemain + urgencyBonus*10.0
 }
 
+// SetTokenSaver receives rotated access and refresh tokens. The pool calls it
+// without holding its lock. Copilot bearer exchanges are not persisted.
+func (p *Pool) SetTokenSaver(fn func(TokenUpdate)) {
+	p.mu.Lock()
+	p.onSave = fn
+	p.mu.Unlock()
+}
+
+// RefreshError is the last background or inline refresh failure for an account.
+func (p *Pool) RefreshError(id string) string {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	st := p.accounts[id]
+	if st == nil {
+		return ""
+	}
+	return st.lastRefreshErr
+}
+
+// StartRefresher renews tokens that are inside the lead time until ctx ends.
+// The first pass runs immediately, so an already-due token does not wait for
+// a client request or for the first tick.
+func (p *Pool) StartRefresher(ctx context.Context) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	go p.refreshLoop(ctx, refreshEvery)
+}
+
+func (p *Pool) refreshLoop(ctx context.Context, every time.Duration) {
+	p.RefreshDue(time.Now())
+	ticker := time.NewTicker(every)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case now := <-ticker.C:
+			p.RefreshDue(now)
+		}
+	}
+}
+
+// RefreshDue refreshes every enabled account whose token is inside the lead
+// time or already expired. A failed refresh leaves a still-valid token in
+// place and records the error for the next pass.
+func (p *Pool) RefreshDue(now time.Time) {
+	type job struct {
+		id   string
+		acct config.AccountConfig
+	}
+	p.mu.Lock()
+	var jobs []job
+	for _, st := range p.accounts {
+		if p.tokenDueLocked(st, now) {
+			jobs = append(jobs, job{id: st.Account.ID, acct: st.Account})
+		}
+	}
+	p.mu.Unlock()
+
+	for _, j := range jobs {
+		upd, err := p.refreshSnapshot(j.acct)
+		p.mu.Lock()
+		st := p.accounts[j.id]
+		if st == nil {
+			p.mu.Unlock()
+			continue
+		}
+		if err != nil {
+			st.lastRefreshErr = err.Error()
+			p.mu.Unlock()
+			log.Printf("[pear] refresh %s: %v", j.id, err)
+			continue
+		}
+		p.applyLocked(st, upd)
+		save := p.onSave
+		p.mu.Unlock()
+		log.Printf("[pear] refreshed %s", j.id)
+		if upd.Persist && save != nil {
+			save(upd.Update)
+		}
+	}
+}
+
 // ResolveBearerToken returns a valid Authorization Bearer token, exchanging or refreshing if needed.
 func (p *Pool) ResolveBearerToken(st *AccountState) (string, error) {
+	if st == nil {
+		return "", fmt.Errorf("nil account")
+	}
 	p.mu.Lock()
-	defer p.mu.Unlock()
-
 	now := time.Now()
 	force := st.forceRefresh
 	st.forceRefresh = false
-	if !force && st.BearerCached != "" && now.Add(2*time.Minute).Before(st.BearerExpiry) {
-		return st.BearerCached, nil
+	if !force && st.BearerCached != "" && now.Add(refreshLead).Before(st.BearerExpiry) {
+		tok := st.BearerCached
+		p.mu.Unlock()
+		return tok, nil
 	}
+	due := force || p.tokenDueLocked(st, now)
+	acct := st.Account
+	kind := accountKind(acct.Agent)
+	p.mu.Unlock()
 
-	// GitHub Copilot token exchange: exchange ghu_/gho_ OAuth token for short-lived Copilot bearer
-	if strings.Contains(st.Account.Agent, "github-copilot") {
-		tok, exp, err := p.exchangeCopilotToken(st.Account.AccessToken)
-		if err == nil && tok != "" {
-			st.BearerCached = tok
-			st.BearerExpiry = exp
+	if !due || kind == "" {
+		p.mu.Lock()
+		tok, ok := usableToken(st, now)
+		p.mu.Unlock()
+		if ok {
 			return tok, nil
 		}
+		return "", fmt.Errorf("no usable token for %s", acct.ID)
 	}
 
-	// OpenAI Codex OAuth refresh if expired
-	codexExpired := st.Account.ExpiresAt > 0 && now.Unix() > st.Account.ExpiresAt-120
-	if st.Account.Agent == "codex" && (force || codexExpired) && st.Account.RefreshToken != "" {
-		if tok, exp, err := p.refreshCodexToken(st.Account.RefreshToken); err == nil {
-			st.Account.AccessToken = tok
-			st.Account.ExpiresAt = exp.Unix()
-			st.BearerCached = tok
-			st.BearerExpiry = exp
+	upd, err := p.refreshSnapshot(acct)
+	p.mu.Lock()
+	if err != nil {
+		st.lastRefreshErr = err.Error()
+		tok, ok := usableToken(st, now)
+		p.mu.Unlock()
+		if ok {
 			return tok, nil
 		}
+		return "", err
 	}
-
-	st.BearerCached = st.Account.AccessToken
-	st.BearerExpiry = now.Add(30 * time.Minute)
-	return st.Account.AccessToken, nil
+	p.applyLocked(st, upd)
+	tok, _ := usableToken(st, now)
+	save := p.onSave
+	p.mu.Unlock()
+	if upd.Persist && save != nil {
+		save(upd.Update)
+	}
+	if tok == "" {
+		return "", fmt.Errorf("refresh produced an empty token for %s", acct.ID)
+	}
+	return tok, nil
 }
 
-func (p *Pool) exchangeCopilotToken(oauthToken string) (string, time.Time, error) {
-	if oauthToken == "" {
-		return "", time.Time{}, fmt.Errorf("empty copilot oauth token")
+func (p *Pool) applyLocked(st *AccountState, upd tokenResult) {
+	st.lastRefreshErr = ""
+	if upd.Persist {
+		if upd.Update.AccessToken != "" {
+			st.Account.AccessToken = upd.Update.AccessToken
+		}
+		if upd.Update.RefreshToken != "" {
+			st.Account.RefreshToken = upd.Update.RefreshToken
+		}
+		if upd.Update.ExpiresAt > 0 {
+			st.Account.ExpiresAt = upd.Update.ExpiresAt
+		}
+		st.BearerCached = st.Account.AccessToken
+		st.BearerExpiry = time.Unix(st.Account.ExpiresAt, 0)
+		return
 	}
-	req, err := http.NewRequest("GET", "https://api.github.com/copilot_internal/v2/token", nil)
+	st.BearerCached = upd.Bearer
+	st.BearerExpiry = upd.BearerExpiry
+}
+
+type tokenResult struct {
+	Update       TokenUpdate
+	Persist      bool
+	Bearer       string
+	BearerExpiry time.Time
+}
+
+func (p *Pool) refreshSnapshot(acct config.AccountConfig) (tokenResult, error) {
+	switch accountKind(acct.Agent) {
+	case "codex":
+		return p.refreshOAuth(acct, "codex", codexTokenURL, codexClientID)
+	case "claude":
+		res, err := p.refreshOAuth(acct, "claude", claudeTokenURL, claudeClientID)
+		if err == nil || !claudeShouldFallback(err) {
+			return res, err
+		}
+		return p.refreshOAuth(acct, "claude", claudeTokenURLLegacy, claudeClientID)
+	case "copilot":
+		return p.exchangeCopilot(acct.AccessToken)
+	default:
+		return tokenResult{}, fmt.Errorf("no refresh for %s", acct.Agent)
+	}
+}
+
+func claudeShouldFallback(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	if strings.Contains(msg, "HTTP 404") || strings.Contains(msg, "HTTP 405") {
+		return true
+	}
+	// A numbered HTTP status means the token host answered. Anything else
+	// (DNS, connection reset) tries the legacy host.
+	return !strings.Contains(msg, "HTTP ")
+}
+
+func (p *Pool) refreshOAuth(acct config.AccountConfig, kind, url, clientID string) (tokenResult, error) {
+	if acct.RefreshToken == "" {
+		return tokenResult{}, fmt.Errorf("%s refresh: empty refresh token", kind)
+	}
+	payload := map[string]string{
+		"grant_type":    "refresh_token",
+		"client_id":     clientID,
+		"refresh_token": acct.RefreshToken,
+	}
+	body, err := json.Marshal(payload)
 	if err != nil {
-		return "", time.Time{}, err
+		return tokenResult{}, err
+	}
+	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return tokenResult{}, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", "pear")
+	if kind == "claude" {
+		req.Header.Set("anthropic-beta", "oauth-2025-04-20")
+	}
+	resp, err := p.client.Do(req)
+	if err != nil {
+		return tokenResult{}, fmt.Errorf("%s refresh: %w", kind, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		io.Copy(io.Discard, resp.Body)
+		return tokenResult{}, fmt.Errorf("%s oauth refresh HTTP %d", kind, resp.StatusCode)
+	}
+	var res struct {
+		AccessToken  string `json:"access_token"`
+		RefreshToken string `json:"refresh_token"`
+		ExpiresIn    int64  `json:"expires_in"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
+		return tokenResult{}, err
+	}
+	if res.AccessToken == "" {
+		return tokenResult{}, fmt.Errorf("%s refresh returned an empty access token", kind)
+	}
+	exp := time.Now().Add(time.Duration(res.ExpiresIn) * time.Second)
+	if res.ExpiresIn <= 0 {
+		exp = time.Now().Add(time.Hour)
+	}
+	return tokenResult{
+		Persist: true,
+		Update: TokenUpdate{
+			ID:           acct.ID,
+			AccessToken:  res.AccessToken,
+			RefreshToken: res.RefreshToken,
+			ExpiresAt:    exp.Unix(),
+		},
+	}, nil
+}
+
+func (p *Pool) exchangeCopilot(oauthToken string) (tokenResult, error) {
+	if oauthToken == "" {
+		return tokenResult{}, fmt.Errorf("empty copilot oauth token")
+	}
+	req, err := http.NewRequest(http.MethodGet, copilotTokenURL, nil)
+	if err != nil {
+		return tokenResult{}, err
 	}
 	req.Header.Set("Authorization", "token "+oauthToken)
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("User-Agent", "GithubCopilot/1.250.0")
 	resp, err := p.client.Do(req)
 	if err != nil {
-		return "", time.Time{}, err
+		return tokenResult{}, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return "", time.Time{}, fmt.Errorf("copilot token exchange HTTP %d", resp.StatusCode)
+		io.Copy(io.Discard, resp.Body)
+		return tokenResult{}, fmt.Errorf("copilot token exchange HTTP %d", resp.StatusCode)
 	}
 	var res struct {
 		Token     string `json:"token"`
 		ExpiresAt int64  `json:"expires_at"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
-		return "", time.Time{}, err
+		return tokenResult{}, err
 	}
-	return res.Token, time.Unix(res.ExpiresAt, 0), nil
+	if res.Token == "" {
+		return tokenResult{}, fmt.Errorf("copilot token exchange returned an empty token")
+	}
+	exp := time.Unix(res.ExpiresAt, 0)
+	if res.ExpiresAt > 1_000_000_000_000 {
+		exp = time.UnixMilli(res.ExpiresAt)
+	}
+	return tokenResult{Bearer: res.Token, BearerExpiry: exp}, nil
 }
 
-func (p *Pool) refreshCodexToken(refreshToken string) (string, time.Time, error) {
-	payload := map[string]string{
-		"grant_type":    "refresh_token",
-		"client_id":     "app_EMoamEEZ73f0CkXaXp7hrann",
-		"refresh_token": refreshToken,
+func accountKind(agent string) string {
+	a := strings.TrimPrefix(agent, "plugin:")
+	switch {
+	case a == "codex":
+		return "codex"
+	case strings.Contains(agent, "github-copilot"):
+		return "copilot"
+	case a == "claude" || strings.HasPrefix(a, "claude"):
+		return "claude"
+	default:
+		return ""
 	}
-	body, _ := json.Marshal(payload)
-	req, err := http.NewRequest("POST", "https://auth.openai.com/oauth/token", bytes.NewReader(body))
-	if err != nil {
-		return "", time.Time{}, err
+}
+
+func expiryTime(v int64) time.Time {
+	if v <= 0 {
+		return time.Time{}
 	}
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := p.client.Do(req)
-	if err != nil {
-		return "", time.Time{}, err
+	if v > 1_000_000_000_000 {
+		return time.UnixMilli(v)
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		io.Copy(io.Discard, resp.Body)
-		return "", time.Time{}, fmt.Errorf("codex oauth refresh HTTP %d", resp.StatusCode)
+	return time.Unix(v, 0)
+}
+
+func (p *Pool) tokenDueLocked(st *AccountState, now time.Time) bool {
+	if st == nil || !st.Account.Enabled {
+		return false
 	}
-	var res struct {
-		AccessToken string `json:"access_token"`
-		ExpiresIn   int64  `json:"expires_in"`
+	switch accountKind(st.Account.Agent) {
+	case "codex", "claude":
+		if st.Account.RefreshToken == "" {
+			return false
+		}
+		exp := expiryTime(st.Account.ExpiresAt)
+		if exp.IsZero() {
+			return false
+		}
+		return !exp.After(now.Add(refreshLead))
+	case "copilot":
+		if st.Account.AccessToken == "" {
+			return false
+		}
+		if st.BearerExpiry.IsZero() {
+			return true
+		}
+		return !st.BearerExpiry.After(now.Add(refreshLead))
+	default:
+		return false
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
-		return "", time.Time{}, err
+}
+
+func usableToken(st *AccountState, now time.Time) (string, bool) {
+	if accountKind(st.Account.Agent) == "copilot" {
+		if st.BearerCached != "" && now.Before(st.BearerExpiry) {
+			return st.BearerCached, true
+		}
+		return "", false
 	}
-	return res.AccessToken, time.Now().Add(time.Duration(res.ExpiresIn) * time.Second), nil
+	if st.BearerCached != "" && now.Before(st.BearerExpiry) {
+		return st.BearerCached, true
+	}
+	if tokenExpired(st, now) || st.Account.AccessToken == "" {
+		return "", false
+	}
+	return st.Account.AccessToken, true
+}
+
+func tokenExpired(st *AccountState, now time.Time) bool {
+	exp := expiryTime(st.Account.ExpiresAt)
+	if exp.IsZero() {
+		return false
+	}
+	return !now.Before(exp)
 }
 
 // ObserveResponseHeaders passively updates quota windows from Anthropic / OpenAI / Codex response headers.

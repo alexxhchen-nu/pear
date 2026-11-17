@@ -41,7 +41,7 @@ type Engine struct {
 	cfg       *config.Config
 	pool      *oauth.Pool
 	stickyMap map[uint64]stickyEntry
-	rrIndex   uint64
+	rrIndex   map[string]uint64
 }
 
 func NewEngine(cfg *config.Config, pool *oauth.Pool) *Engine {
@@ -49,6 +49,7 @@ func NewEngine(cfg *config.Config, pool *oauth.Pool) *Engine {
 		cfg:       cfg,
 		pool:      pool,
 		stickyMap: make(map[uint64]stickyEntry),
+		rrIndex:   make(map[string]uint64),
 	}
 }
 
@@ -166,7 +167,7 @@ func (e *Engine) expandTargetList(spec string, feat RequestFeatures, depth int) 
 					}
 				}
 				var out []string
-				for _, m := range g.Members {
+				for _, m := range e.orderMembers(g, feat) {
 					out = append(out, e.expandTargetList(m, feat, depth+1)...)
 				}
 				return out
@@ -174,6 +175,90 @@ func (e *Engine) expandTargetList(spec string, feat RequestFeatures, depth int) 
 		}
 	}
 	return []string{spec}
+}
+
+// orderMembers applies the group strategy when no rule matched.
+// order and any unknown name keep the written member list.
+func (e *Engine) orderMembers(g config.GroupConfig, feat RequestFeatures) []string {
+	members := append([]string(nil), g.Members...)
+	switch g.Strategy {
+	case "round_robin":
+		if len(members) == 0 {
+			return members
+		}
+		start := int(e.rrIndex[g.ID] % uint64(len(members)))
+		e.rrIndex[g.ID]++
+		return rotate(members, start)
+	case "session_sticky":
+		if len(members) == 0 {
+			return members
+		}
+		start := int(feat.SessionHash % uint64(len(members)))
+		return rotate(members, start)
+	case "smart_pace":
+		return e.paceOrder(members)
+	default:
+		return members
+	}
+}
+
+func rotate(members []string, start int) []string {
+	if len(members) == 0 || start%len(members) == 0 {
+		return members
+	}
+	start %= len(members)
+	out := make([]string, 0, len(members))
+	out = append(out, members[start:]...)
+	out = append(out, members[:start]...)
+	return out
+}
+
+// paceOrder ranks members by the best OAuth account linked to that provider.
+// A member with no account scores the same neutral value as an account that
+// has not reported a window yet, so equal scores stay in written order.
+func (e *Engine) paceOrder(members []string) []string {
+	if len(members) < 2 || e.pool == nil {
+		return members
+	}
+	now := time.Now()
+	type scored struct {
+		spec  string
+		score float64
+	}
+	rows := make([]scored, len(members))
+	for i, spec := range members {
+		rows[i] = scored{spec: spec, score: e.memberPace(spec, now)}
+	}
+	// Stable by original index when scores tie.
+	for i := 1; i < len(rows); i++ {
+		row := rows[i]
+		j := i
+		for j > 0 && rows[j-1].score < row.score {
+			rows[j] = rows[j-1]
+			j--
+		}
+		rows[j] = row
+	}
+	out := make([]string, len(rows))
+	for i, row := range rows {
+		out[i] = row.spec
+	}
+	return out
+}
+
+func (e *Engine) memberPace(spec string, now time.Time) float64 {
+	const neutral = 50.0
+	if strings.HasPrefix(spec, "group/") || e.pool == nil {
+		return neutral
+	}
+	provID := spec
+	if i := strings.IndexByte(spec, '/'); i >= 0 {
+		provID = spec[:i]
+	}
+	if score, ok := e.pool.BestPace(provID, now); ok {
+		return score
+	}
+	return neutral
 }
 
 func matchesRule(r config.RouteRule, f RequestFeatures) bool {
